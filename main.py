@@ -31,10 +31,14 @@ async def main():
         bot = AsyncTeleBot(config.BOT_TOKEN, parse_mode=config.PARSE_MODE)  
           
         # Initialize handlers  
-        handlers = BotHandlers(bot)  
+        handlers = BotHandlers(bot)
+
+        # Start monitoring task  
+        monitor_task = asyncio.create_task(handlers.monitor.start_monitoring(interval=60))  # Check every 5 minutes  
           
-        logger.info("GitHub Repository Preview Bot started successfully!")  
-        logger.info("Bot is polling for messages...")  
+        logger.info("GitHub Repository Preview Bot started successfully!")
+        logger.info("Repository monitoring started!")
+        logger.info("Bot is polling for messages...")
           
         # Start polling  
         await bot.infinity_polling()  
@@ -45,7 +49,12 @@ async def main():
     except Exception as e:  
         logger.error(f"An error occurred: {e}")  
     finally:  
-        logger.info("Bot stopped")  
+        # Stop monitoring  
+        if 'handlers' in locals():  
+            handlers.monitor.stop_monitoring()  
+        if 'monitor_task' in locals():  
+            monitor_task.cancel()  
+        logger.info("Bot stopped") 
   
   
 if __name__ == "__main__":  

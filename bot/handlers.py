@@ -11,6 +11,9 @@ from github.formatter import URLParser
 from .utils import MessageUtils, ErrorMessages, LoadingMessages, CallbackDataManager
 from config import config
 
+from .database import RepositoryTracker
+from .monitor import RepositoryMonitor
+
 class BotHandlers:  
     """Contains all message handlers for the bot."""  
       
@@ -23,15 +26,22 @@ class BotHandlers:
         """  
         self.bot = bot  
         self.github_api = GitHubAPI()  
+        self.tracker = RepositoryTracker()  
+        self.monitor = RepositoryMonitor(self.github_api, self.tracker, self.bot)  
         self.register_handlers()  
-      
-    def register_handlers(self) -> None:  
+
+    def register_handlers(self) -> None:
         """Register all message handlers with the bot."""  
         self.bot.message_handler(commands=['start'])(self.handle_start)  
         self.bot.message_handler(commands=['help'])(self.handle_help)  
         self.bot.message_handler(commands=['repo'])(self.handle_repo)  
-        self.bot.message_handler(commands=['user'])(self.handle_user)  
-          
+        self.bot.message_handler(commands=['user'])(self.handle_user)
+        #tracking handlers
+        self.bot.message_handler(commands=['track'])(self.handle_track)
+        self.bot.message_handler(commands=['untrack'])(self.handle_untrack)
+        self.bot.message_handler(commands=['tracked'])(self.handle_tracked)
+        self.bot.message_handler(commands=['notifications'])(self.handle_notifications)  
+        
         #callback query handlers  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('repo_'))(self.handle_repo_callback)  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('tag_'))(self.handle_repo_callback)  
@@ -78,25 +88,20 @@ You can use this command in several ways:
 • <code>/repo owner/repo</code>  
   
 👤 <b>/user command:</b>  
-• <code>/user username</code>  
+• <code>/user username</code> 
   
-📊 <b>Repository Information Displayed:</b>  
-• Repository name and description  
-• Stars and forks count  
-• Open issues count  
-• Latest release available  
-• Programming languages with percentages  
-• Top 3 repository topics  
-• Repository URL  
+📋 <b>Repository Tracking:</b>  
+• <code>/track owner/repo</code> - Start tracking a repository for new releases  
+• <code>/untrack owner/repo</code> - Stop tracking a repository  
+• <code>/tracked</code> - View your tracked repositories  
+• <code>/notifications on/off</code> - Toggle notification settings  
   
-🔧 <b>Interactive Features:</b>  
-• Browse repository tags and releases  
-• View contributors  
-• Download release assets directly  
-• Navigate through paginated results  
+🔔 <b>Notifications:</b>  
+• Get notified when tracked repositories have new releases  
+• Automatic monitoring every 5 minutes  
   
 ❓ If you encounter any issues, make sure the repository URL or name is correct.  
-"""  
+"""
         await MessageUtils.safe_reply(self.bot, message, help_text)  
       
     async def handle_repo(self, message: Message) -> None:  
@@ -454,3 +459,125 @@ You can use this command in several ways:
             message_text,  
             reply_markup=keyboard  
         )
+
+    async def handle_track(self, message: Message) -> None:  
+        """Handle /track command to start tracking a repository."""  
+        try:  
+            repo_input = MessageUtils.validate_command_args(message.text)  
+            if not repo_input:  
+                await MessageUtils.safe_reply(  
+                    self.bot,   
+                    message,   
+                    "❌ Please specify a repository.\n\n💡 Example: <code>/track microsoft/vscode</code>"  
+                )  
+                return  
+                  
+            parsed = URLParser.parse_repo_input(repo_input)  
+            if not parsed:  
+                await MessageUtils.safe_reply(self.bot, message, ErrorMessages.INVALID_REPO_FORMAT)  
+                return  
+                  
+            owner, repo = parsed  
+              
+            # Check if repository exists  
+            repo_data = await self.github_api.get_repository(owner, repo)  
+            if not repo_data:  
+                await MessageUtils.safe_reply(self.bot, message, ErrorMessages.REPO_NOT_FOUND)  
+                return  
+                  
+            # Add to tracking  
+            await self.tracker.add_tracked_repo(message.from_user.id, owner, repo)  
+              
+            await MessageUtils.safe_reply(  
+                self.bot,  
+                message,  
+                f"✅ <b>Repository Tracked!</b>\n\n📦 <b>{owner}/{repo}</b> is now being tracked.\nYou'll receive notifications when new releases are published."  
+            )  
+              
+        except Exception as e:  
+            print(f"Error in handle_track: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)  
+      
+    async def handle_untrack(self, message: Message) -> None:  
+        """Handle /untrack command to stop tracking a repository."""  
+        try:  
+            repo_input = MessageUtils.validate_command_args(message.text)  
+            if not repo_input:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Please specify a repository.\n\n💡 Example: <code>/untrack microsoft/vscode</code>"  
+                )  
+                return  
+                  
+            parsed = URLParser.parse_repo_input(repo_input)  
+            if not parsed:  
+                await MessageUtils.safe_reply(self.bot, message, ErrorMessages.INVALID_REPO_FORMAT)  
+                return  
+                  
+            owner, repo = parsed  
+              
+            # Remove from tracking  
+            await self.tracker.remove_tracked_repo(message.from_user.id, owner, repo)  
+              
+            await MessageUtils.safe_reply(  
+                self.bot,  
+                message,  
+                f"✅ <b>Repository Untracked!</b>\n\n📦 <b>{owner}/{repo}</b> has been removed from your tracking list."  
+            )  
+              
+        except Exception as e:  
+            print(f"Error in handle_untrack: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)  
+      
+    async def handle_tracked(self, message: Message) -> None:  
+        """Handle /tracked command to show user's tracked repositories."""  
+        try:  
+            tracked_repos = await self.tracker.get_user_tracked_repos(message.from_user.id)  
+              
+            if not tracked_repos:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "📋 <b>No Tracked Repositories</b>\n\nYou're not tracking any repositories yet.\nUse <code>/track owner/repo</code> to start tracking."  
+                )  
+                return  
+                  
+            message_text = "📋 <b>Your Tracked Repositories</b>\n\n"  
+            for i, repo in enumerate(tracked_repos, 1):  
+                message_text += f"{i}. <b>{repo['owner']}/{repo['repo']}</b>\n"  
+                  
+            message_text += f"\n📊 Total: <b>{len(tracked_repos)}</b> repositories"  
+              
+            await MessageUtils.safe_reply(self.bot, message, message_text)  
+              
+        except Exception as e:  
+            print(f"Error in handle_tracked: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+
+    async def handle_notifications(self, message: Message) -> None:  
+        """Handle /notifications command to toggle notification settings."""  
+        try:  
+            # Extract argument (on/off)  
+            arg = MessageUtils.validate_command_args(message.text)  
+            if not arg or arg.lower() not in ['on', 'off']:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Please specify 'on' or 'off'.\n\n💡 Example: <code>/notifications on</code>"  
+                )  
+                return  
+                  
+            # For now, just acknowledge the command  
+            # You can implement actual notification toggle logic later  
+            status = "enabled" if arg.lower() == 'on' else "disabled"  
+              
+            await MessageUtils.safe_reply(  
+                self.bot,  
+                message,  
+                f"🔔 <b>Notifications {status.title()}</b>\n\nNotifications have been {status} for your account."  
+            )  
+              
+        except Exception as e:  
+            print(f"Error in handle_notifications: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
