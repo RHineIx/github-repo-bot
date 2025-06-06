@@ -206,6 +206,21 @@ class GitHubAPI:
             Asset data including download URL or None if not found  
         """  
         return await self._make_request(f"releases/assets/{asset_id}")
+    
+    async def get_repository_issues(self, owner: str, repo: str, state: str = "open", per_page: int = 1) -> Optional[List[Dict[str, Any]]]:  
+        """  
+        Get repository issues.  
+          
+        Args:  
+            owner: Repository owner username  
+            repo: Repository name  
+            state: Issue state (open, closed, all)  
+            per_page: Number of items per page  
+              
+        Returns:  
+            List of issue data or None if not found  
+        """  
+        return await self._make_request(f"repos/{owner}/{repo}/issues?state={state}&per_page={per_page}&sort=created&direction=desc")
       
     async def get_user(self, username: str) -> Optional[Dict[str, Any]]:  
         """  
@@ -218,3 +233,25 @@ class GitHubAPI:
             User data or None if not found  
         """  
         return await self._make_request(f"users/{username}")
+    
+    async def get_authenticated_user_starred_repos(self, page: int = 1, per_page: int = 30) -> Optional[List[Dict[str, Any]]]:  
+        """  
+        Get authenticated user's starred repositories.  
+            
+        Args:  
+            page: Page number (1-based)  
+            per_page: Number of items per page  
+                
+        Returns:  
+            List of starred repository data or None if not found  
+        """  
+        return await self._make_request(f"user/starred?page={page}&per_page={per_page}&sort=created&direction=desc")
+
+    async def get_authenticated_user(self) -> Optional[Dict[str, Any]]:  
+        """  
+        Get information about the authenticated user (token owner).  
+          
+        Returns:  
+            User data of the token owner or None if request failed  
+        """  
+        return await self._make_request("user")

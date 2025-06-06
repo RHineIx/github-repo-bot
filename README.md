@@ -7,17 +7,20 @@
 ## Features
 
 ### 🔍 Repository Information
+
 - Comprehensive repository details (stars, forks, open issues)
 - Programming languages with percentages
 - Latest release information with direct links
 - Repository topics and description
 
 ### 👤 User Profiles
+
 - Complete GitHub user profiles
 - Follower/following statistics
 - Public repository counts
 
 ### 🚀 Interactive Navigation
+
 - Browse repository tags and releases
 - View project contributors
 - Download release assets directly
@@ -27,7 +30,7 @@
 
 ## Available Commands
 
-```
+```bash
 /start    - Start using the bot  
 /help     - Show usage guide  
 /repo     - Get repository information  
@@ -38,7 +41,7 @@
 
 ## Usage Examples
 
-```
+```bash
 /repo microsoft/vscode  
 /repo https://github.com/torvalds/linux  
 /user torvalds  

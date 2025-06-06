@@ -12,7 +12,7 @@ from config import config
 
 # Load environment variables  
 load_dotenv()  
-  
+
 # Configure logging  
 logging.basicConfig(  
     level=logging.INFO,  
@@ -34,7 +34,7 @@ async def main():
         handlers = BotHandlers(bot)
 
         # Start monitoring task  
-        monitor_task = asyncio.create_task(handlers.monitor.start_monitoring(interval=60))  # Check every 5 minutes  
+        monitor_task = asyncio.create_task(handlers.monitor.start_monitoring(interval=30))  # Check every 5 minutes  
           
         logger.info("GitHub Repository Preview Bot started successfully!")
         logger.info("Repository monitoring started!")

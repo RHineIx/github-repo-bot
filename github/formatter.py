@@ -95,14 +95,12 @@ class RepoFormatter:
         message = f"""📦 <a href='{html_url}'>{full_name}</a>
   
 📝 <b>Description:</b>  
-{description}  
+{description}
   
 <blockquote>⭐ Stars: <b>{stars} </b> | 🍴 Forks: <b>{forks} </b> | 🪲 Open Issues: <b>{issues}</b></blockquote>
   
 🚀 <b>Latest Release:</b> {release_info}  
-  
 💻 <b>Lang's:</b> {languages_text}
-  
 🔗 <a href='{html_url}'>View Repo</a>  
   
 {topics_text}"""  
@@ -432,7 +430,7 @@ class RepoFormatter:
             
         return message.strip()  
         
-    @staticmethod  
+    @staticmethod
     def create_navigation_keyboard(owner: str, repo: str, current_page: int, action_type: str, has_next: bool = True) -> types.InlineKeyboardMarkup:  
         buttons = {}  
           
@@ -486,8 +484,7 @@ class UserFormatter:
     
 📝 <b>Bio:</b>  
 {bio}  
-    
-📊 <b>Statistics:</b>  
+     
 👥 Followers: <b>{followers}</b>  
 👤 Following: <b>{following}</b>  
 📁 Public Repositories: <b>{public_repos}</b>  

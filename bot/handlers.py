@@ -40,7 +40,8 @@ class BotHandlers:
         self.bot.message_handler(commands=['track'])(self.handle_track)
         self.bot.message_handler(commands=['untrack'])(self.handle_untrack)
         self.bot.message_handler(commands=['tracked'])(self.handle_tracked)
-        self.bot.message_handler(commands=['notifications'])(self.handle_notifications)  
+        self.bot.message_handler(commands=['notifications'])(self.handle_notifications)
+        self.bot.message_handler(commands=['trackme'])(self.handle_trackme)
         
         #callback query handlers  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('repo_'))(self.handle_repo_callback)  
@@ -66,7 +67,14 @@ class BotHandlers:
 💡 <b>Examples:</b>  
 • <code>/repo https://github.com/microsoft/vscode</code>  
 • <code>/repo microsoft/vscode</code>  
-• <code>/user torvalds</code>  
+• <code>/user torvalds</code>
+
+📋 <b>Repository Tracking:</b>  
+• <code>/track owner/repo releases</code> - Track new releases only  
+• <code>/track owner/repo issues</code> - Track new issues only    
+• <code>/track owner/repo releases,issues</code> - Track both releases and issues  
+• <code>/untrack owner/repo</code> - Stop tracking a repository  
+• <code>/tracked</code> - View your tracked repositories
   
 🚀 Start by sending a command to try the bot!  
 """  
@@ -91,10 +99,11 @@ You can use this command in several ways:
 • <code>/user username</code> 
   
 📋 <b>Repository Tracking:</b>  
-• <code>/track owner/repo</code> - Start tracking a repository for new releases  
+• <code>/track owner/repo releases</code> - Track new releases only  
+• <code>/track owner/repo issues</code> - Track new issues only    
+• <code>/track owner/repo releases,issues</code> - Track both releases and issues  
 • <code>/untrack owner/repo</code> - Stop tracking a repository  
-• <code>/tracked</code> - View your tracked repositories  
-• <code>/notifications on/off</code> - Toggle notification settings  
+• <code>/tracked</code> - View your tracked repositories
   
 🔔 <b>Notifications:</b>  
 • Get notified when tracked repositories have new releases  
@@ -222,6 +231,51 @@ You can use this command in several ways:
         except Exception as e:  
             print(f"Error in handle_user: {e}")  
             await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)  
+
+    async def handle_trackme(self, message: Message) -> None:  
+        """Handle /trackme command to track user's personal GitHub stars automatically."""  
+        try:  
+            # Send typing action and loading message  
+            await MessageUtils.send_typing_action(self.bot, message.chat.id)  
+            wait_msg = await MessageUtils.safe_reply(self.bot, message, "🔍 Setting up personal stars tracking...")  
+              
+            if not wait_msg:  
+                return  
+              
+            # Get authenticated user info using the GitHub token  
+            user_data = await self.github_api.get_authenticated_user()  
+            if not user_data:  
+                await MessageUtils.safe_edit_message(  
+                    self.bot,  
+                    message.chat.id,  
+                    wait_msg.message_id,  
+                    "❌ Failed to authenticate with GitHub. Please check your GitHub token configuration."  
+                )  
+                return  
+              
+            github_username = user_data.get('login')  
+            if not github_username:
+                await MessageUtils.safe_edit_message(  
+                    self.bot,  
+                    message.chat.id,
+                    wait_msg.message_id,  
+                    "❌ Unable to retrieve your GitHub username from the token."  
+                )  
+                return  
+              
+            # Add to stars tracking  
+            await self.tracker.add_user_stars_tracking(message.from_user.id, github_username)  
+              
+            await MessageUtils.safe_edit_message(  
+                self.bot,  
+                message.chat.id,  
+                wait_msg.message_id,  
+                f"✅ <b>Personal Stars Tracking Enabled!</b>\n\n⭐ Now tracking your stars for <b>@{github_username}</b>\nYou'll receive notifications when you star new repositories."  
+            )  
+              
+        except Exception as e:  
+            print(f"Error in handle_trackme: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
       
     async def handle_repo_callback(self, call: CallbackQuery) -> None:  
         try:  
@@ -461,23 +515,59 @@ You can use this command in several ways:
         )
 
     async def handle_track(self, message: Message) -> None:  
-        """Handle /track command to start tracking a repository."""  
+        """Handle /track command with tracking type specification."""  
         try:  
-            repo_input = MessageUtils.validate_command_args(message.text)  
-            if not repo_input:  
+            args = MessageUtils.validate_command_args(message.text)  
+            if not args:  
                 await MessageUtils.safe_reply(  
                     self.bot,   
                     message,   
-                    "❌ Please specify a repository.\n\n💡 Example: <code>/track microsoft/vscode</code>"  
+                    "❌ Please specify a repository and tracking types.\n\n💡 Example: <code>/track microsoft/vscode releases,issues</code>"  
+                )  
+                return  
+              
+            # Parse arguments: owner/repo [track_types]  
+            parts = args.split(' ', 1)  
+            if len(parts) < 2:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Please specify tracking types.\n\n💡 Available types: <code>releases</code>, <code>issues</code>\n💡 Example: <code>/track microsoft/vscode releases,issues</code>"  
                 )  
                 return  
                   
+            repo_input = parts[0]  
+            track_types_input = parts[1]  
+              
+            # Parse repository  
             parsed = URLParser.parse_repo_input(repo_input)  
             if not parsed:  
                 await MessageUtils.safe_reply(self.bot, message, ErrorMessages.INVALID_REPO_FORMAT)  
                 return  
                   
             owner, repo = parsed  
+              
+            # Parse tracking types  
+            valid_types = ['releases', 'issues']  
+            track_types = [t.strip().lower() for t in track_types_input.split(',')]  
+              
+            # Validate tracking types  
+            invalid_types = [t for t in track_types if t not in valid_types]  
+            if invalid_types:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    f"❌ Invalid tracking types: {', '.join(invalid_types)}\n\n💡 Available types: <code>releases</code>, <code>issues</code>"  
+                )  
+                return  
+                  
+            if not track_types:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Please specify at least one tracking type.\n\n💡 Available types: <code>releases</code>, <code>issues</code>"  
+                )  
+                return  
               
             # Check if repository exists  
             repo_data = await self.github_api.get_repository(owner, repo)  
@@ -486,17 +576,18 @@ You can use this command in several ways:
                 return  
                   
             # Add to tracking  
-            await self.tracker.add_tracked_repo(message.from_user.id, owner, repo)  
+            await self.tracker.add_tracked_repo(message.from_user.id, owner, repo, track_types)  
               
+            types_text = ", ".join(track_types)  
             await MessageUtils.safe_reply(  
                 self.bot,  
                 message,  
-                f"✅ <b>Repository Tracked!</b>\n\n📦 <b>{owner}/{repo}</b> is now being tracked.\nYou'll receive notifications when new releases are published."  
+                f"✅ <b>Repository Tracked!</b>\n\n📦 <b>{owner}/{repo}</b> is now being tracked for: <code>{types_text}</code>\n\nYou'll receive notifications when new {types_text} are available."  
             )  
               
         except Exception as e:  
             print(f"Error in handle_track: {e}")  
-            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
       
     async def handle_untrack(self, message: Message) -> None:  
         """Handle /untrack command to stop tracking a repository."""  
