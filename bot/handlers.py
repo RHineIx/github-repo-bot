@@ -222,22 +222,17 @@ You can use this command in several ways:
         try:  
             await self.bot.answer_callback_query(call.id)  
               
-            # إضافة تشخيص مؤقت  
-            print(f"Callback data received: {call.data}")  
-              
             parts = call.data.split(':')  
             action = parts[0]  
               
-            if action in ['repo_tags', 'repo_contributors', 'repo_home', 'tag_releases', 'rel_assets']:  
+            if action in ['repo_tags', 'repo_contributors', 'repo_home', 'tag_releases', 'tag_releases_page', 'rel_assets']:  
                 data_hash = parts[1]  
-                print(f"Looking for hash: {data_hash}")  # للتشخيص  
                 data = CallbackDataManager.get_callback_data(data_hash)  
-                print(f"Retrieved data: {data}")  # للتشخيص  
                   
                 if not data:  
                     await self.bot.answer_callback_query(call.id, "Session expired. Please try again.")  
                     return  
-                      
+                  
                 if action == 'repo_home':  
                     await self._show_repo_main(call, data['owner'], data['repo'])  
                 elif action == 'repo_tags':  
@@ -245,19 +240,14 @@ You can use this command in several ways:
                 elif action == 'repo_contributors':  
                     await self._show_contributors(call, data['owner'], data['repo'], data.get('page', 1))  
                 elif action == 'tag_releases':  
-                    await self._show_tag_releases(call, data['owner'], data['repo'], data['tag_name'])  
+                    await self._show_tag_releases(call, data['owner'], data['repo'], data['tag_name'], 1)  
+                elif action == 'tag_releases_page':  
+                    await self._show_tag_releases(call, data['owner'], data['repo'], data['tag_name'], data['page'])  
                 elif action == 'rel_assets':  
-                    print(f"Calling _show_release_assets with: {data}")  # للتشخيص  
                     await self._show_release_assets(call, data['owner'], data['repo'], data['release_id'])  
-            else:  
-                # إضافة معالجة للأزرار التي لا تستخدم نظام hash  
-                print(f"Unhandled action: {action}")  
-                await self.bot.answer_callback_query(call.id, f"Unknown action: {action}")  
-                  
+                      
         except Exception as e:  
             print(f"Error in handle_repo_callback: {e}")  
-            import traceback  
-            traceback.print_exc()  # طباعة تفاصيل الخطأ الكاملة  
             await self.bot.answer_callback_query(call.id, "An error occurred.")
       
     async def handle_download_callback(self, call: CallbackQuery) -> None:  
@@ -380,19 +370,25 @@ You can use this command in several ways:
             reply_markup=keyboard  
         )  
       
-    async def _show_tag_releases(self, call: CallbackQuery, owner: str, repo: str, tag_name: str) -> None:  
-        """Show releases for a specific tag."""  
-        # Get all releases for this repository  
-        releases = await self.github_api.get_repository_releases(owner, repo)  
-        if releases:  
+    async def _show_tag_releases(self, call: CallbackQuery, owner: str, repo: str, tag_name: str, page: int = 1) -> None:  
+        """Show releases for a specific tag with pagination."""  
+        # Get releases for this repository with pagination  
+        all_releases = await self.github_api.get_repository_releases(owner, repo, page, per_page=50)  # Get more to filter  
+          
+        if all_releases:  
             # Filter releases that match this tag  
-            tag_releases = [r for r in releases if r.get('tag_name') == tag_name]  
+            tag_releases = [r for r in all_releases if r.get('tag_name') == tag_name]  
+              
+            # Apply pagination to filtered results  
+            start_idx = (page - 1) * 5  
+            end_idx = start_idx + 5  
+            paginated_releases = tag_releases[start_idx:end_idx]  
         else:  
-            tag_releases = []  
+            paginated_releases = []  
           
         # Format and display  
-        message_text = RepoFormatter.format_tag_releases(tag_name, tag_releases, owner, repo)  
-        keyboard = RepoFormatter.create_tag_releases_keyboard(tag_releases, owner, repo, tag_name)  
+        message_text = RepoFormatter.format_tag_releases(tag_name, paginated_releases, owner, repo, page)  
+        keyboard = RepoFormatter.create_tag_releases_keyboard(paginated_releases, owner, repo, tag_name, page)  
           
         await MessageUtils.safe_edit_message(  
             self.bot,  

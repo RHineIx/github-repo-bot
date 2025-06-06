@@ -213,15 +213,16 @@ class RepoFormatter:
         return markup  
       
     @staticmethod  
-    def format_tag_releases(tag_name: str, releases: List[Dict[str, Any]], owner: str, repo: str) -> str:  
+    def format_tag_releases(tag_name: str, releases: List[Dict[str, Any]], owner: str, repo: str, page: int = 1) -> str:  
         """  
-        Format releases for a specific tag.  
+        Format releases for a specific tag with pagination support.  
           
         Args:  
             tag_name: Tag name  
-            releases: List of release data  
+            releases: List of release data (limited to page size)  
             owner: Repository owner  
             repo: Repository name  
+            page: Current page number  
               
         Returns:  
             Formatted message string  
@@ -229,7 +230,7 @@ class RepoFormatter:
         if not releases:  
             return f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tag: {tag_name}</b>\n\nNo releases found for this tag."  
           
-        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tag: {tag_name}</b>\n\n🚀 <b>Available Releases:</b>\n\n"  
+        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tag: {tag_name} (Page {page})</b>\n\n🚀 <b>Available Releases:</b>\n\n"  
           
         for i, release in enumerate(releases, 1):  
             release_name = release.get('name', tag_name)  
@@ -242,25 +243,26 @@ class RepoFormatter:
             else:  
                 message += f"{i}. <b>{release_name}</b> ({assets_count} files)\n"  
           
-        return message.strip()  
+        return message.strip()
       
     @staticmethod  
     def create_tag_releases_keyboard(  
         releases: List[Dict[str, Any]],   
         owner: str,   
         repo: str,   
-        tag_name: str  
+        tag_name: str,  
+        page: int = 1  
     ) -> types.InlineKeyboardMarkup:  
-        """Create keyboard for tag releases with compressed callback data."""  
+        """Create keyboard for tag releases with pagination and download options."""  
         buttons = {}  
-        
+          
+        # Add release buttons (limited to current page)  
         for release in releases:  
             release_name = release.get('name', release.get('tag_name', 'Unknown'))  
             release_id = release.get('id')  
             assets_count = len(release.get('assets', []))  
-            
+              
             if assets_count > 0:  
-                # Use compressed callback data  
                 callback_data = CallbackDataManager.create_short_callback(  
                     'rel_assets',  
                     {  
@@ -273,15 +275,50 @@ class RepoFormatter:
                 buttons[f"📥 {release_name} ({assets_count} files)"] = {  
                     'callback_data': callback_data  
                 }  
-        
-        # Back button  
+            else:  
+                buttons[f"📄 {release_name} (No files)"] = {  
+                    'callback_data': f'release_info:{owner}/{repo}:{release_id}'  
+                }  
+          
+        # Add navigation buttons  
+        nav_buttons = {}  
+          
+        # Previous page button  
+        if page > 1:  
+            prev_callback = CallbackDataManager.create_short_callback(  
+                'tag_releases_page',  
+                {'owner': owner, 'repo': repo, 'tag_name': tag_name, 'page': page - 1}  
+            )  
+            nav_buttons['⬅️ Previous'] = {'callback_data': prev_callback}  
+          
+        # Next page button (show if we have exactly 5 releases, indicating more might exist)  
+        if len(releases) == 5:  # ITEMS_PER_PAGE  
+            next_callback = CallbackDataManager.create_short_callback(  
+                'tag_releases_page',  
+                {'owner': owner, 'repo': repo, 'tag_name': tag_name, 'page': page + 1}  
+            )  
+            nav_buttons['Next ➡️'] = {'callback_data': next_callback}  
+          
+        # Back to tags button  
         back_callback = CallbackDataManager.create_short_callback(  
             'repo_tags',  
             {'owner': owner, 'repo': repo, 'page': 1}  
         )  
-        buttons['⬅️ Back to Tags'] = {'callback_data': back_callback}  
-        
-        return quick_markup(buttons, row_width=1)  
+        nav_buttons['🏠 Back to Tags'] = {'callback_data': back_callback}  
+          
+        # Create markup with releases first, then navigation  
+        markup = types.InlineKeyboardMarkup(row_width=1)  
+          
+        # Add release buttons  
+        for text, data in buttons.items():  
+            markup.add(types.InlineKeyboardButton(text=text, **data))  
+          
+        # Add navigation buttons in a row  
+        if nav_buttons:  
+            nav_btns = [types.InlineKeyboardButton(text=text, **data) for text, data in nav_buttons.items()]  
+            markup.row(*nav_btns)  
+          
+        return markup
     
     @staticmethod  
     def create_release_assets_keyboard(  
@@ -316,8 +353,14 @@ class RepoFormatter:
                         'repo': repo  
                     }  
                 )
-                buttons[f"📥 {asset_name}{size_text}"] = {'callback_data': callback_data}  
-        
+                buttons[f"📥 {asset_name}{size_text}"] = {'callback_data': callback_data}
+
+            back_callback = CallbackDataManager.create_short_callback(
+                    'tag_releases',
+                    {'owner': owner, 'repo': repo, 'tag_name': tag_name}
+            )
+            buttons['⬅️ Back'] = {'callback_data': back_callback}
+
         return quick_markup(buttons, row_width=1)
       
     @staticmethod  
