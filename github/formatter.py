@@ -6,8 +6,7 @@ from typing import Dict, Any, Optional, List
 from telebot import types  
 from telebot.util import quick_markup
 from bot.utils import CallbackDataManager 
-  
-  
+
 class RepoFormatter:  
     """Formats repository data for Telegram messages."""  
       
@@ -320,47 +319,47 @@ class RepoFormatter:
           
         return markup
     
-    @staticmethod  
-    def create_release_assets_keyboard(  
-        assets: List[Dict[str, Any]],   
-        owner: str,   
-        repo: str,  
-        release_id: int,  
-        tag_name: str  
-    ) -> types.InlineKeyboardMarkup:  
-        """Create keyboard for release assets with compressed callback data."""  
-        buttons = {}  
-        
-        for asset in assets:  
-            asset_name = asset.get('name', 'Unknown')  
-            asset_url = asset.get('browser_download_url')  
-            asset_size = asset.get('size', 0)  
-            
-            # Format size for display  
-            size_mb = asset_size / (1024 * 1024)  
-            size_text = f" ({size_mb:.1f}MB)" if size_mb >= 1 else f" ({asset_size}B)"  
-            
-            # Check size limit  
-            max_size_mb = 50  
-            if asset_size <= max_size_mb * 1024 * 1024:  
-                callback_data = CallbackDataManager.create_short_callback(  
-                    'dl_direct',  
-                    {  
-                        'url': asset_url,  
-                        'size': asset_size,  
-                        'name': asset_name,  
-                        'owner': owner,  
-                        'repo': repo  
-                    }  
-                )
-                buttons[f"📥 {asset_name}{size_text}"] = {'callback_data': callback_data}
-
-            back_callback = CallbackDataManager.create_short_callback(
-                    'tag_releases',
-                    {'owner': owner, 'repo': repo, 'tag_name': tag_name}
-            )
-            buttons['⬅️ Back'] = {'callback_data': back_callback}
-
+    @staticmethod    
+    def create_release_assets_keyboard(    
+        assets: List[Dict[str, Any]],     
+        owner: str,     
+        repo: str,    
+        release_id: int,    
+        tag_name: str    
+    ) -> types.InlineKeyboardMarkup:    
+        """Create keyboard for release assets with compressed callback data."""    
+        buttons = {}    
+           
+        for asset in assets:    
+            asset_name = asset.get('name', 'Unknown')    
+            asset_url = asset.get('browser_download_url')    
+            asset_size = asset.get('size', 0)    
+              
+            # Format size for display    
+            size_mb = asset_size / (1024 * 1024)    
+            size_text = f" ({size_mb:.1f}MB)" if size_mb >= 1 else f" ({asset_size}B)"    
+              
+            # Check size limit    
+            max_size_mb = 50    
+            if asset_size <= max_size_mb * 1024 * 1024:    
+                callback_data = CallbackDataManager.create_short_callback(    
+                    'dl_direct',    
+                    {    
+                        'url': asset_url,    
+                        'size': asset_size,    
+                        'name': asset_name,    
+                        'owner': owner,    
+                        'repo': repo    
+                    }    
+                )  
+                buttons[f"📥 {asset_name}{size_text}"] = {'callback_data': callback_data}  
+      
+        back_callback = CallbackDataManager.create_short_callback(  
+            'tag_releases',  
+            {'owner': owner, 'repo': repo, 'tag_name': tag_name}  
+        )  
+        buttons['⬅️ Back'] = {'callback_data': back_callback}  
+      
         return quick_markup(buttons, row_width=1)
       
     @staticmethod  
