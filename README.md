@@ -18,6 +18,6 @@ With token: 5000 requests/hour
 ---
 # Development
 ### Requirements
-Python 3.9+
-pyTelegramBotAPI 4.27.0+
-aiohttp for async HTTP requests
+- Python 3.9+\
+- pyTelegramBotAPI 4.27.0+\
+- aiohttp for async HTTP requests
