@@ -3,7 +3,7 @@ GitHub API client for fetching repository and user information.
 """  
 import aiohttp  
 import asyncio  
-from typing import Optional, Dict, Any  
+from typing import Optional, Dict, Any, List  
 from config import config  
   
   
@@ -93,6 +93,97 @@ class GitHubAPI:
             Latest release data or None if no releases  
         """  
         return await self._make_request(f"repos/{owner}/{repo}/releases/latest")  
+      
+    async def get_repository_tags(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:  
+        """  
+        Get repository tags with pagination.  
+          
+        Args:  
+            owner: Repository owner username  
+            repo: Repository name  
+            page: Page number (1-based)  
+            per_page: Number of items per page  
+              
+        Returns:  
+            List of tag data or None if not found  
+        """  
+        per_page = per_page or config.ITEMS_PER_PAGE  
+        return await self._make_request(f"repos/{owner}/{repo}/tags?page={page}&per_page={per_page}")  
+      
+    async def get_repository_releases(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:  
+        """  
+        Get repository releases with pagination.  
+          
+        Args:  
+            owner: Repository owner username  
+            repo: Repository name  
+            page: Page number (1-based)  
+            per_page: Number of items per page  
+              
+        Returns:  
+            List of release data or None if not found  
+        """  
+        per_page = per_page or config.ITEMS_PER_PAGE  
+        return await self._make_request(f"repos/{owner}/{repo}/releases?page={page}&per_page={per_page}")  
+      
+    async def get_release_assets(self, owner: str, repo: str, release_id: int) -> Optional[List[Dict[str, Any]]]:  
+        """  
+        Get assets for a specific release.  
+          
+        Args:  
+            owner: Repository owner username  
+            repo: Repository name  
+            release_id: Release ID  
+              
+        Returns:  
+            List of asset data or None if not found  
+        """  
+        return await self._make_request(f"repos/{owner}/{repo}/releases/{release_id}/assets")  
+      
+    async def get_repository_contributors(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:  
+        """  
+        Get repository contributors with pagination.  
+          
+        Args:  
+            owner: Repository owner username  
+            repo: Repository name  
+            page: Page number (1-based)  
+            per_page: Number of items per page  
+              
+        Returns:  
+            List of contributor data or None if not found  
+        """  
+        per_page = per_page or config.ITEMS_PER_PAGE  
+        return await self._make_request(f"repos/{owner}/{repo}/contributors?page={page}&per_page={per_page}")  
+      
+    async def download_asset(self, asset_url: str, asset_size: int) -> Optional[bytes]:  
+        """  
+        Download a release asset if it's within size limits.  
+          
+        Args:  
+            asset_url: Direct download URL for the asset  
+            asset_size: Size of the asset in bytes  
+              
+        Returns:  
+            Asset data as bytes or None if download failed or too large  
+        """  
+        # Check size limit  
+        max_size_bytes = config.MAX_DOWNLOAD_SIZE_MB * 1024 * 1024  
+        if asset_size > max_size_bytes:  
+            print(f"Asset too large: {asset_size} bytes > {max_size_bytes} bytes")  
+            return None  
+          
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=config.REQUEST_TIMEOUT)) as session:  
+            try:  
+                async with session.get(asset_url, headers=self.headers) as response:  
+                    if response.status == 200:  
+                        return await response.read()  
+                    else:  
+                        print(f"Download failed: {response.status}")  
+                        return None  
+            except Exception as e:  
+                print(f"Download error: {e}")  
+                return None  
       
     async def get_user(self, username: str) -> Optional[Dict[str, Any]]:  
         """  

@@ -132,6 +132,41 @@ class MessageUtils:
                 print(f"Attempt {attempt + 1} failed, retrying in {delay}s: {e}")  
                 await asyncio.sleep(delay)  
         return None  
+      
+    @staticmethod  
+    async def send_document_from_bytes(  
+        bot: AsyncTeleBot,  
+        chat_id: int,  
+        file_data: bytes,  
+        filename: str,  
+        caption: Optional[str] = None  
+    ) -> Optional[Any]:  
+        """  
+        Send a document from bytes data.  
+          
+        Args:  
+            bot: AsyncTeleBot instance  
+            chat_id: Chat ID to send document to  
+            file_data: File data as bytes  
+            filename: Name for the file  
+            caption: Optional caption for the document  
+              
+        Returns:  
+            Sent message object or None if failed  
+        """  
+        try:  
+            from io import BytesIO  
+            file_obj = BytesIO(file_data)  
+            file_obj.name = filename  
+              
+            return await bot.send_document(  
+                chat_id=chat_id,  
+                document=file_obj,  
+                caption=caption  
+            )  
+        except Exception as e:  
+            print(f"Failed to send document: {e}")  
+            return None  
   
   
 class ErrorMessages:  
@@ -162,6 +197,10 @@ class ErrorMessages:
     RATE_LIMIT_EXCEEDED = (  
         "⚠️ Rate limit exceeded. Please wait a moment before trying again."  
     )  
+      
+    DOWNLOAD_FAILED = "❌ Download failed. Please try again later."  
+      
+    FILE_TOO_LARGE = "❌ File is too large for direct download."  
   
   
 class LoadingMessages:  
@@ -169,4 +208,86 @@ class LoadingMessages:
       
     FETCHING_REPO = "🔍 Fetching repository information..."  
     FETCHING_USER = "🔍 Fetching user information..."  
-    PROCESSING = "⏳ Processing your request..."
+    PROCESSING = "⏳ Processing your request..."  
+    DOWNLOADING = "📥 Downloading file..."  
+    PREPARING_DOWNLOAD = "⏳ Preparing download..."  
+  
+  
+class CallbackDataParser:  
+    """Utility class for parsing callback data."""  
+      
+    @staticmethod  
+    def parse_repo_callback(callback_data: str) -> Optional[dict]:  
+        """  
+        Parse repository-related callback data.  
+          
+        Args:  
+            callback_data: Callback data string  
+              
+        Returns:  
+            Parsed data dictionary or None if parsing failed  
+        """  
+        try:  
+            parts = callback_data.split(':')  
+            if len(parts) < 2:  
+                return None  
+              
+            action = parts[0]  
+              
+            if action == 'repo_home':  
+                owner, repo = parts[1].split('/')  
+                return {  
+                    'action': 'home',  
+                    'owner': owner,  
+                    'repo': repo  
+                }  
+              
+            elif action in ['repo_tags', 'repo_releases', 'repo_contributors']:  
+                owner, repo = parts[1].split('/')  
+                page = int(parts[2]) if len(parts) > 2 else 1  
+                return {  
+                    'action': action.replace('repo_', ''),  
+                    'owner': owner,  
+                    'repo': repo,  
+                    'page': page  
+                }  
+              
+            elif action == 'repo_files':  
+                owner, repo = parts[1].split('/')  
+                return {  
+                    'action': 'files',  
+                    'owner': owner,  
+                    'repo': repo  
+                }  
+              
+            return None  
+              
+        except Exception as e:  
+            print(f"Error parsing callback data: {e}")  
+            return None  
+      
+    @staticmethod  
+    def parse_download_callback(callback_data: str) -> Optional[dict]:  
+        """  
+        Parse download-related callback data.  
+          
+        Args:  
+            callback_data: Callback data string  
+              
+        Returns:  
+            Parsed data dictionary or None if parsing failed  
+        """  
+        try:  
+            parts = callback_data.split(':')  
+            if len(parts) < 3 or parts[0] != 'download_asset':  
+                return None  
+              
+            return {  
+                'action': 'download',  
+                'asset_id': parts[1],  
+                'asset_size': int(parts[2])  
+            }  
+              
+        except Exception as e:  
+            print(f"Error parsing download callback data: {e}")  
+            return None
