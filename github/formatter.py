@@ -113,7 +113,7 @@ class RepoFormatter:
     @staticmethod  
     def create_repo_main_keyboard(owner: str, repo: str) -> types.InlineKeyboardMarkup:  
         """  
-        Create main repository keyboard with 4 action buttons.  
+        Create main repository keyboard with 2 action buttons.  
           
         Args:  
             owner: Repository owner  
@@ -124,15 +124,13 @@ class RepoFormatter:
         """  
         return quick_markup({  
             '🏷️ Tags': {'callback_data': f'repo_tags:{owner}/{repo}:1'},  
-            '🚀 Releases': {'callback_data': f'repo_releases:{owner}/{repo}:1'},  
-            '👥 Contributors': {'callback_data': f'repo_contributors:{owner}/{repo}:1'},  
-            '📁 Files': {'callback_data': f'repo_files:{owner}/{repo}'}  
+            '👥 Contributors': {'callback_data': f'repo_contributors:{owner}/{repo}:1'}  
         }, row_width=2)  
       
     @staticmethod  
     def format_tags_list(tags: List[Dict[str, Any]], owner: str, repo: str, page: int) -> str:  
         """  
-        Format tags list message.  
+        Format tags list message with clickable tags.  
           
         Args:  
             tags: List of tag data from GitHub API  
@@ -146,121 +144,187 @@ class RepoFormatter:
         if not tags:  
             return f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tags</b>\n\nNo tags found."  
           
-        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tags (Page {page})</b>\n\n"  
-          
-        for i, tag in enumerate(tags, 1):  
-            tag_name = tag.get('name', 'Unknown')  
-            commit_sha = tag.get('commit', {}).get('sha', '')[:7]  
-            message += f"{i}. <code>{tag_name}</code> ({commit_sha})\n"  
-          
+        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tags (Page {page})</b>\n\nClick on any tag to view its releases:\n"  
+        
         return message.strip()  
       
     @staticmethod  
-    def format_releases_list(releases: List[Dict[str, Any]], owner: str, repo: str, page: int) -> str:  
+    def create_tags_keyboard(tags: List[Dict[str, Any]], owner: str, repo: str, page: int) -> types.InlineKeyboardMarkup:  
         """  
-        Format releases list message.  
+        Create keyboard for tags with clickable tag buttons.  
           
         Args:  
-            releases: List of release data from GitHub API  
+            tags: List of tag data  
             owner: Repository owner  
             repo: Repository name  
-            page: Current page number  
+            page: Current page  
+              
+        Returns:  
+            InlineKeyboardMarkup with tag buttons  
+        """  
+        buttons = {}  
+          
+        # Add clickable tag buttons  
+        for tag in tags:  
+            tag_name = tag.get('name', 'Unknown')  
+            buttons[f"🏷️ {tag_name}"] = {  
+                'callback_data': f'tag_releases:{owner}/{repo}:{tag_name}'  
+            }  
+          
+        # Add navigation buttons  
+        nav_buttons = {}  
+        if page > 1:  
+            nav_buttons['⬅️ Previous'] = {  
+                'callback_data': f'repo_tags:{owner}/{repo}:{page - 1}'  
+            }  
+          
+        if len(tags) == 5:  # Assuming ITEMS_PER_PAGE = 5  
+            nav_buttons['Next ➡️'] = {  
+                'callback_data': f'repo_tags:{owner}/{repo}:{page + 1}'  
+            }  
+          
+        nav_buttons['🏠 Back to Repo'] = {  
+            'callback_data': f'repo_home:{owner}/{repo}'  
+        }  
+          
+        # Create markup with tags first, then navigation  
+        markup = types.InlineKeyboardMarkup(row_width=1)  
+          
+        # Add tag buttons (one per row)  
+        for text, data in buttons.items():  
+            markup.add(types.InlineKeyboardButton(text=text, **data))  
+          
+        # Add navigation buttons (in a row)  
+        nav_btns = [types.InlineKeyboardButton(text=text, **data) for text, data in nav_buttons.items()]  
+        markup.row(*nav_btns)  
+          
+        return markup  
+      
+    @staticmethod  
+    def format_tag_releases(tag_name: str, releases: List[Dict[str, Any]], owner: str, repo: str) -> str:  
+        """  
+        Format releases for a specific tag.  
+          
+        Args:  
+            tag_name: Tag name  
+            releases: List of release data  
+            owner: Repository owner  
+            repo: Repository name  
               
         Returns:  
             Formatted message string  
         """  
         if not releases:  
-            return f"📦 <b>{owner}/{repo}</b>\n\n🚀 <b>Releases</b>\n\nNo releases found."  
+            return f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tag: {tag_name}</b>\n\nNo releases found for this tag."  
           
-        message = f"📦 <b>{owner}/{repo}</b>\n\n🚀 <b>Releases (Page {page})</b>\n\n"  
+        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tag: {tag_name}</b>\n\n🚀 <b>Available Releases:</b>\n\n"  
           
         for i, release in enumerate(releases, 1):  
-            tag_name = release.get('tag_name', 'Unknown')  
-            name = release.get('name', tag_name)  
+            release_name = release.get('name', tag_name)  
             published_at = release.get('published_at', '')  
+            assets_count = len(release.get('assets', []))  
+              
             if published_at:  
                 date = published_at.split('T')[0]  
-                message += f"{i}. <b>{name}</b> (<code>{tag_name}</code>) - {date}\n"  
+                message += f"{i}. <b>{release_name}</b> - {date} ({assets_count} files)\n"  
             else:  
-                message += f"{i}. <b>{name}</b> (<code>{tag_name}</code>)\n"  
+                message += f"{i}. <b>{release_name}</b> ({assets_count} files)\n"  
           
         return message.strip()  
       
     @staticmethod  
-    def format_contributors_list(contributors: List[Dict[str, Any]], owner: str, repo: str, page: int) -> str:  
+    def create_tag_releases_keyboard(  
+        releases: List[Dict[str, Any]],   
+        owner: str,   
+        repo: str,   
+        tag_name: str  
+    ) -> types.InlineKeyboardMarkup:  
         """  
-        Format contributors list message.  
+        Create keyboard for tag releases with download options.  
           
         Args:  
-            contributors: List of contributor data from GitHub API  
+            releases: List of release data  
             owner: Repository owner  
             repo: Repository name  
-            page: Current page number  
+            tag_name: Tag name  
+              
+        Returns:  
+            InlineKeyboardMarkup with release buttons  
+        """  
+        buttons = {}  
+          
+        # Add release buttons  
+        for release in releases:  
+            release_name = release.get('name', release.get('tag_name', 'Unknown'))  
+            release_id = release.get('id')  
+            assets_count = len(release.get('assets', []))  
+              
+            if assets_count > 0:  
+                buttons[f"📥 {release_name} ({assets_count} files)"] = {  
+                    'callback_data': f'release_assets:{owner}/{repo}:{release_id}'  
+                }  
+            else:  
+                buttons[f"📄 {release_name} (No files)"] = {  
+                    'callback_data': f'release_info:{owner}/{repo}:{release_id}'  
+                }  
+          
+        # Add back button  
+        buttons['⬅️ Back to Tags'] = {  
+            'callback_data': f'repo_tags:{owner}/{repo}:1'  
+        }  
+          
+        return quick_markup(buttons, row_width=1)  
+      
+    @staticmethod  
+    def format_release_assets(  
+        release: Dict[str, Any],   
+        assets: List[Dict[str, Any]],   
+        owner: str,   
+        repo: str  
+    ) -> str:  
+        """  
+        Format release assets for download.  
+          
+        Args:  
+            release: Release data  
+            assets: List of asset data  
+            owner: Repository owner  
+            repo: Repository name  
               
         Returns:  
             Formatted message string  
         """  
-        if not contributors:  
-            return f"📦 <b>{owner}/{repo}</b>\n\n👥 <b>Contributors</b>\n\nNo contributors found."  
+        release_name = release.get('name', release.get('tag_name', 'Unknown'))  
           
-        message = f"📦 <b>{owner}/{repo}</b>\n\n👥 <b>Contributors (Page {page})</b>\n\n"  
+        if not assets:  
+            return f"📦 <b>{owner}/{repo}</b>\n\n🚀 <b>Release: {release_name}</b>\n\nNo downloadable files found."  
           
-        for i, contributor in enumerate(contributors, 1):  
-            login = contributor.get('login', 'Unknown')  
-            contributions = contributor.get('contributions', 0)  
-            html_url = contributor.get('html_url', '')  
-            message += f"{i}. <a href='{html_url}'>@{login}</a> ({contributions} contributions)\n"  
+        message = f"📦 <b>{owner}/{repo}</b>\n\n🚀 <b>Release: {release_name}</b>\n\n📥 <b>Available Downloads:</b>\n\n"  
+          
+        for i, asset in enumerate(assets, 1):  
+            asset_name = asset.get('name', 'Unknown')  
+            asset_size = asset.get('size', 0)  
+            download_count = asset.get('download_count', 0)  
+              
+            # Format size  
+            size_mb = asset_size / (1024 * 1024)  
+            if size_mb >= 1:  
+                size_text = f"{size_mb:.1f}MB"  
+            else:  
+                size_text = f"{asset_size}B"  
+              
+            message += f"{i}. <b>{asset_name}</b>\n"  
+            message += f"   Size: {size_text} | Downloads: {download_count}\n\n"  
           
         return message.strip()  
-      
-    @staticmethod  
-    def create_navigation_keyboard(  
-        owner: str,   
-        repo: str,   
-        current_page: int,   
-        action_type: str,  
-        has_next: bool = True  
-    ) -> types.InlineKeyboardMarkup:  
-        """  
-        Create navigation keyboard for paginated content.  
-          
-        Args:  
-            owner: Repository owner  
-            repo: Repository name  
-            current_page: Current page number  
-            action_type: Type of action (tags, releases, contributors)  
-            has_next: Whether there's a next page available  
-              
-        Returns:  
-            InlineKeyboardMarkup with navigation buttons  
-        """  
-        buttons = {}  
-          
-        # Previous page button  
-        if current_page > 1:  
-            buttons['⬅️ Previous'] = {  
-                'callback_data': f'repo_{action_type}:{owner}/{repo}:{current_page - 1}'  
-            }  
-          
-        # Next page button  
-        if has_next:  
-            buttons['Next ➡️'] = {  
-                'callback_data': f'repo_{action_type}:{owner}/{repo}:{current_page + 1}'  
-            }  
-          
-        # Home button  
-        buttons['🏠 Back to Repo'] = {  
-            'callback_data': f'repo_home:{owner}/{repo}'  
-        }  
-          
-        return quick_markup(buttons, row_width=2)  
       
     @staticmethod  
     def create_release_assets_keyboard(  
         assets: List[Dict[str, Any]],   
         owner: str,   
         repo: str,  
-        release_id: int  
+        release_id: int,  
+        tag_name: str  
     ) -> types.InlineKeyboardMarkup:  
         """  
         Create keyboard for release assets download.  
@@ -270,6 +334,7 @@ class RepoFormatter:
             owner: Repository owner  
             repo: Repository name  
             release_id: Release ID  
+            tag_name: Tag name for back navigation  
               
         Returns:  
             InlineKeyboardMarkup with download buttons  
@@ -283,31 +348,110 @@ class RepoFormatter:
               
             # Format size for display  
             size_mb = asset_size / (1024 * 1024)  
-            size_text = f" ({size_mb:.1f}MB)" if size_mb >= 1 else f" ({asset_size}B)"  
+            if size_mb >= 1:  
+                size_text = f" ({size_mb:.1f}MB)"  
+            else:  
+                size_text = f" ({asset_size}B)"  
               
-            buttons[f"📥 {asset_name}{size_text}"] = {  
-                'callback_data': f'download_asset:{asset_id}:{asset_size}'  
-            }  
+            # Check if file is within download limit  
+            max_size_mb = 50  # This should come from config  
+            if asset_size <= max_size_mb * 1024 * 1024:  
+                buttons[f"📥 {asset_name}{size_text}"] = {  
+                    'callback_data': f'download_asset:{asset_id}:{asset_size}:{owner}/{repo}'  
+                }  
+            else:  
+                buttons[f"❌ {asset_name}{size_text} (Too large)"] = {  
+                    'callback_data': f'file_too_large:{asset_id}'  
+                }  
           
         # Back button  
         buttons['⬅️ Back to Releases'] = {  
-            'callback_data': f'repo_releases:{owner}/{repo}:1'  
+            'callback_data': f'tag_releases:{owner}/{repo}:{tag_name}'  
         }  
           
         return quick_markup(buttons, row_width=1)  
-  
-  
+      
+    @staticmethod  
+    def format_contributors_list(contributors: List[Dict[str, Any]], owner: str, repo: str, page: int) -> str:  
+        """  
+        Format contributors list message.  
+            
+        Args:  
+            contributors: List of contributor data from GitHub API  
+            owner: Repository owner  
+            repo: Repository name  
+            page: Current page number  
+                
+        Returns:  
+            Formatted message string  
+        """  
+        if not contributors:  
+            return f"📦 <b>{owner}/{repo}</b>\n\n👥 <b>Contributors</b>\n\nNo contributors found."  
+            
+        message = f"📦 <b>{owner}/{repo}</b>\n\n👥 <b>Contributors (Page {page})</b>\n\n"  
+            
+        for i, contributor in enumerate(contributors, 1):  
+            login = contributor.get('login', 'Unknown')  
+            contributions = contributor.get('contributions', 0)  
+            html_url = contributor.get('html_url', '')  
+            message += f"{i}. <a href='{html_url}'>@{login}</a> ({contributions} contributions)\n"  
+            
+        return message.strip()  
+        
+    @staticmethod  
+    def create_navigation_keyboard(  
+        owner: str,   
+        repo: str,   
+        current_page: int,   
+        action_type: str,  
+        has_next: bool = True  
+    ) -> types.InlineKeyboardMarkup:  
+        """  
+        Create navigation keyboard for paginated content.  
+            
+        Args:  
+            owner: Repository owner  
+            repo: Repository name  
+            current_page: Current page number  
+            action_type: Type of action (tags, contributors)  
+            has_next: Whether there's a next page available  
+                
+        Returns:  
+            InlineKeyboardMarkup with navigation buttons  
+        """  
+        buttons = {}  
+            
+        # Previous page button  
+        if current_page > 1:  
+            buttons['⬅️ Previous'] = {  
+                'callback_data': f'repo_{action_type}:{owner}/{repo}:{current_page - 1}'  
+            }  
+            
+        # Next page button  
+        if has_next:  
+            buttons['Next ➡️'] = {  
+                'callback_data': f'repo_{action_type}:{owner}/{repo}:{current_page + 1}'  
+            }  
+            
+        # Home button  
+        buttons['🏠 Back to Repo'] = {  
+            'callback_data': f'repo_home:{owner}/{repo}'  
+        }  
+            
+        return quick_markup(buttons, row_width=2)  
+    
+    
 class UserFormatter:  
     """Formats user data for Telegram messages."""  
-      
+        
     @staticmethod  
     def format_user_info(user_data: Dict[str, Any]) -> str:  
         """  
         Format user information message.  
-          
+            
         Args:  
             user_data: User information from GitHub API  
-              
+                
         Returns:  
             Formatted HTML message string  
         """  
@@ -318,37 +462,37 @@ class UserFormatter:
         following = RepoFormatter.format_number(user_data.get('following', 0))  
         public_repos = user_data.get('public_repos', 0)  
         html_url = user_data.get('html_url', '')  
-          
+            
         message = f"""  
 👤 <b>{name}</b>  
 🔗 <code>@{login}</code>  
-  
+    
 📝 <b>Bio:</b>  
 {bio}  
-  
+    
 📊 <b>Statistics:</b>  
 👥 Followers: <b>{followers}</b>  
 👤 Following: <b>{following}</b>  
 📁 Public Repositories: <b>{public_repos}</b>  
-  
+    
 🔗 <b>Profile:</b>  
 <a href="{html_url}">{html_url}</a>  
 """  
-          
+            
         return message.strip()  
-  
-  
+    
+    
 class URLParser:  
     """Utility class for parsing GitHub URLs and repository names."""  
-      
+        
     @staticmethod  
     def parse_repo_input(text: str) -> Optional[tuple]:  
         """  
         Parse GitHub repository URL or owner/repo format.  
-          
+            
         Args:  
             text: Input text containing repository reference  
-              
+                
         Returns:  
             Tuple of (owner, repo) or None if parsing failed  
         """  
@@ -357,7 +501,7 @@ class URLParser:
             r'github\.com/([^/]+)/([^/\s]+)',  # Full GitHub URL  
             r'^([^/\s]+)/([^/\s]+)$'          # owner/repo format  
         ]  
-          
+            
         for pattern in patterns:  
             match = re.search(pattern, text.strip())  
             if match:  

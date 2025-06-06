@@ -35,7 +35,9 @@ class BotHandlers:
           
         # Register callback query handlers  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('repo_'))(self.handle_repo_callback)  
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('tag_'))(self.handle_repo_callback)  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('download_'))(self.handle_download_callback)  
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('release_'))(self.handle_repo_callback)  
       
     async def handle_start(self, message: Message) -> None:  
         """  
@@ -236,22 +238,27 @@ You can use this command in several ways:
                 owner, repo = parts[1].split('/')  
                 await self._show_repo_main(call, owner, repo)  
                   
-            elif action in ['repo_tags', 'repo_releases', 'repo_contributors']:  
+            elif action in ['repo_tags', 'repo_contributors']:  
                 # Handle paginated content  
                 owner, repo = parts[1].split('/')  
                 page = int(parts[2]) if len(parts) > 2 else 1  
                   
                 if action == 'repo_tags':  
                     await self._show_tags(call, owner, repo, page)  
-                elif action == 'repo_releases':  
-                    await self._show_releases(call, owner, repo, page)  
                 elif action == 'repo_contributors':  
                     await self._show_contributors(call, owner, repo, page)  
-                      
-            elif action == 'repo_files':  
-                # Show file browser (placeholder for now)  
+              
+            elif action == 'tag_releases':  
+                # Handle tag releases view  
                 owner, repo = parts[1].split('/')  
-                await self._show_files(call, owner, repo)  
+                tag_name = parts[2]  
+                await self._show_tag_releases(call, owner, repo, tag_name)  
+              
+            elif action == 'release_assets':  
+                # Handle release assets view  
+                owner, repo = parts[1].split('/')  
+                release_id = int(parts[2])  
+                await self._show_release_assets(call, owner, repo, release_id)  
                   
         except Exception as e:  
             print(f"Error in handle_repo_callback: {e}")  
@@ -271,6 +278,7 @@ You can use this command in several ways:
             parts = call.data.split(':')  
             asset_id = parts[1]  
             asset_size = int(parts[2])  
+            owner, repo = parts[3].split('/')  
               
             # Check size limit  
             max_size_bytes = config.MAX_DOWNLOAD_SIZE_MB * 1024 * 1024  
@@ -333,9 +341,8 @@ You can use this command in several ways:
         # Format tags list  
         message_text = RepoFormatter.format_tags_list(tags, owner, repo, page)  
           
-        # Create navigation keyboard  
-        has_next = len(tags) == config.ITEMS_PER_PAGE  
-        keyboard = RepoFormatter.create_navigation_keyboard(owner, repo, page, 'tags', has_next)  
+        # Create tags keyboard with clickable tag buttons  
+        keyboard = RepoFormatter.create_tags_keyboard(tags, owner, repo, page)  
           
         await MessageUtils.safe_edit_message(  
             self.bot,  
@@ -345,19 +352,54 @@ You can use this command in several ways:
             reply_markup=keyboard  
         )  
       
-    async def _show_releases(self, call: CallbackQuery, owner: str, repo: str, page: int) -> None:  
-        """Show repository releases."""  
-        releases = await self.github_api.get_repository_releases(owner, repo, page)  
-        if not releases:  
-            await self.bot.answer_callback_query(call.id, "No releases found.")  
+    async def _show_tag_releases(self, call: CallbackQuery, owner: str, repo: str, tag_name: str) -> None:  
+        """Show releases for a specific tag."""  
+        # Get all releases for this repository  
+        releases = await self.github_api.get_repository_releases(owner, repo)  
+        if releases:  
+            # Filter releases that match this tag  
+            tag_releases = [r for r in releases if r.get('tag_name') == tag_name]  
+        else:  
+            tag_releases = []  
+          
+        # Format and display  
+        message_text = RepoFormatter.format_tag_releases(tag_name, tag_releases, owner, repo)  
+        keyboard = RepoFormatter.create_tag_releases_keyboard(tag_releases, owner, repo, tag_name)  
+          
+        await MessageUtils.safe_edit_message(  
+            self.bot,  
+            call.message.chat.id,  
+            call.message.message_id,  
+            message_text,  
+            reply_markup=keyboard  
+        )
+
+    async def _show_release_assets(self, call: CallbackQuery, owner: str, repo: str, release_id: int) -> None:  
+        """Show release assets for download."""  
+        # Get release data  
+        releases = await self.github_api.get_repository_releases(owner, repo)  
+        release = None  
+        for r in releases:  
+            if r.get('id') == release_id:  
+                release = r  
+                break  
+          
+        if not release:  
+            await self.bot.answer_callback_query(call.id, "Release not found.")  
             return  
           
-        # Format releases list  
-        message_text = RepoFormatter.format_releases_list(releases, owner, repo, page)  
+        # Get assets for this release  
+        assets = await self.github_api.get_release_assets(owner, repo, release_id)  
+        if not assets:  
+            await self.bot.answer_callback_query(call.id, "No assets found for this release.")  
+            return  
           
-        # Create navigation keyboard  
-        has_next = len(releases) == config.ITEMS_PER_PAGE  
-        keyboard = RepoFormatter.create_navigation_keyboard(owner, repo, page, 'releases', has_next)  
+        # Get tag name for back navigation  
+        tag_name = release.get('tag_name', 'Unknown')  
+          
+        # Format and display  
+        message_text = RepoFormatter.format_release_assets(release, assets, owner, repo)  
+        keyboard = RepoFormatter.create_release_assets_keyboard(assets, owner, repo, release_id, tag_name)  
           
         await MessageUtils.safe_edit_message(  
             self.bot,  
@@ -387,8 +429,4 @@ You can use this command in several ways:
             call.message.message_id,  
             message_text,  
             reply_markup=keyboard  
-        )  
-      
-    async def _show_files(self, call: CallbackQuery, owner: str, repo: str) -> None:  
-        """Show repository files (placeholder)."""  
-        await self.bot.answer_callback_query(call.id, "File browser feature coming soon!")
+        )
