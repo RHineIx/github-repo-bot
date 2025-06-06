@@ -1,8 +1,10 @@
 """  
 Utility functions for the Telegram bot.  
 """  
-import asyncio  
-from typing import Optional, Callable, Any  
+import asyncio 
+import hashlib
+import json
+from typing import Optional, Callable, Any, Dict
 from telebot.async_telebot import AsyncTeleBot  
   
   
@@ -213,8 +215,28 @@ class LoadingMessages:
     PREPARING_DOWNLOAD = "⏳ Preparing download..."  
   
   
-class CallbackDataParser:  
-    """Utility class for parsing callback data."""  
+class CallbackDataManager:  
+    """Manages callback data with hash compression for Telegram's 64-byte limit."""  
+      
+    _data_store: Dict[str, Dict[str, Any]] = {}  
+      
+    @classmethod  
+    def create_short_callback(cls, action: str, data: Dict[str, Any]) -> str:  
+        """Create a short callback data string using hash."""  
+        # Create a unique hash for the data  
+        data_str = json.dumps(data, sort_keys=True)  
+        data_hash = hashlib.md5(data_str.encode()).hexdigest()[:8]  
+          
+        # Store the full data  
+        cls._data_store[data_hash] = data  
+          
+        # Return short callback format  
+        return f"{action}:{data_hash}"  
+      
+    @classmethod  
+    def get_callback_data(cls, data_hash: str) -> Dict[str, Any]:  
+        """Retrieve full data from hash."""  
+        return cls._data_store.get(data_hash, {})   
       
     @staticmethod  
     def parse_repo_callback(callback_data: str) -> Optional[dict]:  

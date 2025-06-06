@@ -159,11 +159,11 @@ class GitHubAPI:
     async def download_asset(self, asset_url: str, asset_size: int) -> Optional[bytes]:  
         """  
         Download a release asset if it's within size limits.  
-          
+        
         Args:  
             asset_url: Direct download URL for the asset  
             asset_size: Size of the asset in bytes  
-              
+            
         Returns:  
             Asset data as bytes or None if download failed or too large  
         """  
@@ -172,18 +172,40 @@ class GitHubAPI:
         if asset_size > max_size_bytes:  
             print(f"Asset too large: {asset_size} bytes > {max_size_bytes} bytes")  
             return None  
-          
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=config.REQUEST_TIMEOUT)) as session:  
+        
+        # Use longer timeout for large files  
+        timeout = max(config.REQUEST_TIMEOUT, asset_size // (1024 * 1024) * 10)  # 10 seconds per MB  
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:  
             try:  
                 async with session.get(asset_url, headers=self.headers) as response:  
                     if response.status == 200:  
-                        return await response.read()  
+                        # Read the file in chunks to handle large files better  
+                        data = bytearray()  
+                        async for chunk in response.content.iter_chunked(8192):  
+                            data.extend(chunk)  
+                        return bytes(data)  
                     else:  
                         print(f"Download failed: {response.status}")  
                         return None  
+            except asyncio.TimeoutError:  
+                print(f"Download timeout for asset: {asset_url}")  
+                return None  
             except Exception as e:  
                 print(f"Download error: {e}")  
-                return None  
+                return None
+            
+    async def get_asset_download_url(self, asset_id: int) -> Optional[Dict[str, Any]]:  
+        """  
+        Get asset download information by ID.  
+        
+        Args:  
+            asset_id: GitHub asset ID  
+            
+        Returns:  
+            Asset data including download URL or None if not found  
+        """  
+        return await self._make_request(f"releases/assets/{asset_id}")
       
     async def get_user(self, username: str) -> Optional[Dict[str, Any]]:  
         """  

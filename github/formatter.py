@@ -4,7 +4,8 @@ Response formatting utilities for GitHub data.
 import re  
 from typing import Dict, Any, Optional, List  
 from telebot import types  
-from telebot.util import quick_markup  
+from telebot.util import quick_markup
+from bot.utils import CallbackDataManager 
   
   
 class RepoFormatter:  
@@ -83,7 +84,7 @@ class RepoFormatter:
             lang_percentages = RepoFormatter.calculate_language_percentages(languages)  
             # Get top 3 languages only  
             top_languages = sorted(lang_percentages.items(), key=lambda x: x[1], reverse=True)[:3]  
-            languages_text = " ".join([f"#{lang}: {percent:.1f}%" for lang, percent in top_languages])  
+            languages_text = " ".join([f"#{lang}: (<code>{percent:.1f}%</code>)" for lang, percent in top_languages])  
           
         # Top 3 topics  
         topics_text = ""  
@@ -92,17 +93,16 @@ class RepoFormatter:
             topics_text = " ".join([f"#{topic}" for topic in top_topics])  
           
         # Format message with new layout  
-        message = f"""📦 <a href='{html_url}'>{full_name}</a>  
+        message = f"""📦 <a href='{html_url}'>{full_name}</a>
   
 📝 <b>Description:</b>  
 {description}  
   
-⭐ Stars: <b>{stars}</b> | 🍴 Forks: <b>{forks}</b>  
-🪲 Open Issues: <b>{issues}</b>  
+<blockquote>⭐ Stars: <b>{stars} </b> | 🍴 Forks: <b>{forks} </b> | 🪲 Open Issues: <b>{issues}</b></blockquote>
   
 🚀 <b>Latest Release:</b> {release_info}  
   
-💻 <b>Lang's:</b> {languages_text}  
+💻 <b>Lang's:</b> {languages_text}
   
 🔗 <a href='{html_url}'>View Repo</a>  
   
@@ -113,19 +113,24 @@ class RepoFormatter:
     @staticmethod  
     def create_repo_main_keyboard(owner: str, repo: str) -> types.InlineKeyboardMarkup:  
         """  
-        Create main repository keyboard with 2 action buttons.  
-          
-        Args:  
-            owner: Repository owner  
-            repo: Repository name  
-              
-        Returns:  
-            InlineKeyboardMarkup with repository action buttons  
+        Create main repository keyboard with 2 action buttons using compressed callback data.  
         """  
+        # Use CallbackDataManager for tags button  
+        tags_callback = CallbackDataManager.create_short_callback(  
+            'repo_tags',  
+            {'owner': owner, 'repo': repo, 'page': 1}  
+        )  
+          
+        # Use CallbackDataManager for contributors button  
+        contributors_callback = CallbackDataManager.create_short_callback(  
+            'repo_contributors',   
+            {'owner': owner, 'repo': repo, 'page': 1}  
+        )  
+          
         return quick_markup({  
-            '🏷️ Tags': {'callback_data': f'repo_tags:{owner}/{repo}:1'},  
-            '👥 Contributors': {'callback_data': f'repo_contributors:{owner}/{repo}:1'}  
-        }, row_width=2)  
+            '🏷️ Tags': {'callback_data': tags_callback},  
+            '👥 Contributors': {'callback_data': contributors_callback}  
+        }, row_width=2)
       
     @staticmethod  
     def format_tags_list(tags: List[Dict[str, Any]], owner: str, repo: str, page: int) -> str:  
@@ -144,8 +149,8 @@ class RepoFormatter:
         if not tags:  
             return f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tags</b>\n\nNo tags found."  
           
-        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tags (Page {page})</b>\n\nClick on any tag to view its releases:\n"  
-        
+        message = f"📦 <b>{owner}/{repo}</b>\n\n🏷️ <b>Tags (Page {page})</b>\n\nClick on any tag to view its releases:\n\n"  
+          
         return message.strip()  
       
     @staticmethod  
@@ -167,26 +172,33 @@ class RepoFormatter:
         # Add clickable tag buttons  
         for tag in tags:  
             tag_name = tag.get('name', 'Unknown')  
-            buttons[f"🏷️ {tag_name}"] = {  
-                'callback_data': f'tag_releases:{owner}/{repo}:{tag_name}'  
-            }  
-          
-        # Add navigation buttons  
+            callback_data = CallbackDataManager.create_short_callback(  
+                'tag_releases',  
+                {'owner': owner, 'repo': repo, 'tag_name': tag_name}  
+            )  
+            buttons[f"🏷️ {tag_name}"] = {'callback_data': callback_data}  
+        
+        # Navigation buttons  
         nav_buttons = {}  
         if page > 1:  
-            nav_buttons['⬅️ Previous'] = {  
-                'callback_data': f'repo_tags:{owner}/{repo}:{page - 1}'  
-            }  
-          
-        if len(tags) == 5:  # Assuming ITEMS_PER_PAGE = 5  
-            nav_buttons['Next ➡️'] = {  
-                'callback_data': f'repo_tags:{owner}/{repo}:{page + 1}'  
-            }  
-          
-        nav_buttons['🏠 Back to Repo'] = {  
-            'callback_data': f'repo_home:{owner}/{repo}'  
-        }  
-          
+            prev_callback = CallbackDataManager.create_short_callback(  
+                'repo_tags',  
+                {'owner': owner, 'repo': repo, 'page': page - 1}  
+            )  
+            nav_buttons['⬅️ Previous'] = {'callback_data': prev_callback}  
+        
+        if len(tags) == 5:  
+            next_callback = CallbackDataManager.create_short_callback(  
+                'repo_tags',   
+                {'owner': owner, 'repo': repo, 'page': page + 1}  
+            )  
+            nav_buttons['Next ➡️'] = {'callback_data': next_callback}  
+        
+        home_callback = CallbackDataManager.create_short_callback(  
+            'repo_home',  
+            {'owner': owner, 'repo': repo}  
+        )  
+        nav_buttons['🏠 Back to Repo'] = {'callback_data': home_callback}
         # Create markup with tags first, then navigation  
         markup = types.InlineKeyboardMarkup(row_width=1)  
           
@@ -239,41 +251,74 @@ class RepoFormatter:
         repo: str,   
         tag_name: str  
     ) -> types.InlineKeyboardMarkup:  
-        """  
-        Create keyboard for tag releases with download options.  
-          
-        Args:  
-            releases: List of release data  
-            owner: Repository owner  
-            repo: Repository name  
-            tag_name: Tag name  
-              
-        Returns:  
-            InlineKeyboardMarkup with release buttons  
-        """  
+        """Create keyboard for tag releases with compressed callback data."""  
         buttons = {}  
-          
-        # Add release buttons  
+        
         for release in releases:  
             release_name = release.get('name', release.get('tag_name', 'Unknown'))  
             release_id = release.get('id')  
             assets_count = len(release.get('assets', []))  
-              
+            
             if assets_count > 0:  
+                # Use compressed callback data  
+                callback_data = CallbackDataManager.create_short_callback(  
+                    'rel_assets',  
+                    {  
+                        'owner': owner,  
+                        'repo': repo,  
+                        'release_id': release_id,  
+                        'tag_name': tag_name  
+                    }  
+                )  
                 buttons[f"📥 {release_name} ({assets_count} files)"] = {  
-                    'callback_data': f'release_assets:{owner}/{repo}:{release_id}'  
+                    'callback_data': callback_data  
                 }  
-            else:  
-                buttons[f"📄 {release_name} (No files)"] = {  
-                    'callback_data': f'release_info:{owner}/{repo}:{release_id}'  
-                }  
-          
-        # Add back button  
-        buttons['⬅️ Back to Tags'] = {  
-            'callback_data': f'repo_tags:{owner}/{repo}:1'  
-        }  
-          
+        
+        # Back button  
+        back_callback = CallbackDataManager.create_short_callback(  
+            'repo_tags',  
+            {'owner': owner, 'repo': repo, 'page': 1}  
+        )  
+        buttons['⬅️ Back to Tags'] = {'callback_data': back_callback}  
+        
         return quick_markup(buttons, row_width=1)  
+    
+    @staticmethod  
+    def create_release_assets_keyboard(  
+        assets: List[Dict[str, Any]],   
+        owner: str,   
+        repo: str,  
+        release_id: int,  
+        tag_name: str  
+    ) -> types.InlineKeyboardMarkup:  
+        """Create keyboard for release assets with compressed callback data."""  
+        buttons = {}  
+        
+        for asset in assets:  
+            asset_name = asset.get('name', 'Unknown')  
+            asset_url = asset.get('browser_download_url')  
+            asset_size = asset.get('size', 0)  
+            
+            # Format size for display  
+            size_mb = asset_size / (1024 * 1024)  
+            size_text = f" ({size_mb:.1f}MB)" if size_mb >= 1 else f" ({asset_size}B)"  
+            
+            # Check size limit  
+            max_size_mb = 50  
+            if asset_size <= max_size_mb * 1024 * 1024:  
+                callback_data = CallbackDataManager.create_short_callback(  
+                    'dl_direct',  
+                    {  
+                        'url': asset_url,  
+                        'size': asset_size,  
+                        'name': asset_name,  
+                        'owner': owner,  
+                        'repo': repo  
+                    }  
+                )
+                buttons[f"📥 {asset_name}{size_text}"] = {'callback_data': callback_data}  
+        
+        return quick_markup(buttons, row_width=1)
       
     @staticmethod  
     def format_release_assets(  
@@ -319,59 +364,6 @@ class RepoFormatter:
         return message.strip()  
       
     @staticmethod  
-    def create_release_assets_keyboard(  
-        assets: List[Dict[str, Any]],   
-        owner: str,   
-        repo: str,  
-        release_id: int,  
-        tag_name: str  
-    ) -> types.InlineKeyboardMarkup:  
-        """  
-        Create keyboard for release assets download.  
-          
-        Args:  
-            assets: List of release assets  
-            owner: Repository owner  
-            repo: Repository name  
-            release_id: Release ID  
-            tag_name: Tag name for back navigation  
-              
-        Returns:  
-            InlineKeyboardMarkup with download buttons  
-        """  
-        buttons = {}  
-          
-        for asset in assets:  
-            asset_name = asset.get('name', 'Unknown')  
-            asset_id = asset.get('id')  
-            asset_size = asset.get('size', 0)  
-              
-            # Format size for display  
-            size_mb = asset_size / (1024 * 1024)  
-            if size_mb >= 1:  
-                size_text = f" ({size_mb:.1f}MB)"  
-            else:  
-                size_text = f" ({asset_size}B)"  
-              
-            # Check if file is within download limit  
-            max_size_mb = 50  # This should come from config  
-            if asset_size <= max_size_mb * 1024 * 1024:  
-                buttons[f"📥 {asset_name}{size_text}"] = {  
-                    'callback_data': f'download_asset:{asset_id}:{asset_size}:{owner}/{repo}'  
-                }  
-            else:  
-                buttons[f"❌ {asset_name}{size_text} (Too large)"] = {  
-                    'callback_data': f'file_too_large:{asset_id}'  
-                }  
-          
-        # Back button  
-        buttons['⬅️ Back to Releases'] = {  
-            'callback_data': f'tag_releases:{owner}/{repo}:{tag_name}'  
-        }  
-          
-        return quick_markup(buttons, row_width=1)  
-      
-    @staticmethod  
     def format_contributors_list(contributors: List[Dict[str, Any]], owner: str, repo: str, page: int) -> str:  
         """  
         Format contributors list message.  
@@ -399,47 +391,30 @@ class RepoFormatter:
         return message.strip()  
         
     @staticmethod  
-    def create_navigation_keyboard(  
-        owner: str,   
-        repo: str,   
-        current_page: int,   
-        action_type: str,  
-        has_next: bool = True  
-    ) -> types.InlineKeyboardMarkup:  
-        """  
-        Create navigation keyboard for paginated content.  
-            
-        Args:  
-            owner: Repository owner  
-            repo: Repository name  
-            current_page: Current page number  
-            action_type: Type of action (tags, contributors)  
-            has_next: Whether there's a next page available  
-                
-        Returns:  
-            InlineKeyboardMarkup with navigation buttons  
-        """  
+    def create_navigation_keyboard(owner: str, repo: str, current_page: int, action_type: str, has_next: bool = True) -> types.InlineKeyboardMarkup:  
         buttons = {}  
-            
-        # Previous page button  
+          
         if current_page > 1:  
-            buttons['⬅️ Previous'] = {  
-                'callback_data': f'repo_{action_type}:{owner}/{repo}:{current_page - 1}'  
-            }  
-            
-        # Next page button  
+            prev_callback = CallbackDataManager.create_short_callback(  
+                f'repo_{action_type}',  
+                {'owner': owner, 'repo': repo, 'page': current_page - 1}  
+            )  
+            buttons['⬅️ Previous'] = {'callback_data': prev_callback}  
+          
         if has_next:  
-            buttons['Next ➡️'] = {  
-                'callback_data': f'repo_{action_type}:{owner}/{repo}:{current_page + 1}'  
-            }  
-            
-        # Home button  
-        buttons['🏠 Back to Repo'] = {  
-            'callback_data': f'repo_home:{owner}/{repo}'  
-        }  
-            
-        return quick_markup(buttons, row_width=2)  
-    
+            next_callback = CallbackDataManager.create_short_callback(  
+                f'repo_{action_type}',  
+                {'owner': owner, 'repo': repo, 'page': current_page + 1}  
+            )  
+            buttons['Next ➡️'] = {'callback_data': next_callback}  
+          
+        home_callback = CallbackDataManager.create_short_callback(  
+            'repo_home',  
+            {'owner': owner, 'repo': repo}  
+        )  
+        buttons['🏠 Back to Repo'] = {'callback_data': home_callback}  
+          
+        return quick_markup(buttons, row_width=2)
     
 class UserFormatter:  
     """Formats user data for Telegram messages."""  

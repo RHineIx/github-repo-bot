@@ -8,10 +8,9 @@ from telebot.types import Message, CallbackQuery
   
 from github import GitHubAPI, RepoFormatter, UserFormatter  
 from github.formatter import URLParser  
-from .utils import MessageUtils, ErrorMessages, LoadingMessages  
-from config import config  
-  
-  
+from .utils import MessageUtils, ErrorMessages, LoadingMessages, CallbackDataManager
+from config import config
+
 class BotHandlers:  
     """Contains all message handlers for the bot."""  
       
@@ -33,11 +32,11 @@ class BotHandlers:
         self.bot.message_handler(commands=['repo'])(self.handle_repo)  
         self.bot.message_handler(commands=['user'])(self.handle_user)  
           
-        # Register callback query handlers  
+        #callback query handlers  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('repo_'))(self.handle_repo_callback)  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('tag_'))(self.handle_repo_callback)  
-        self.bot.callback_query_handler(func=lambda call: call.data.startswith('download_'))(self.handle_download_callback)  
-        self.bot.callback_query_handler(func=lambda call: call.data.startswith('release_'))(self.handle_repo_callback)  
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('rel_'))(self.handle_repo_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('dl_'))(self.handle_download_callback)
       
     async def handle_start(self, message: Message) -> None:  
         """  
@@ -220,83 +219,112 @@ You can use this command in several ways:
             await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)  
       
     async def handle_repo_callback(self, call: CallbackQuery) -> None:  
-        """  
-        Handle repository-related callback queries.  
-          
-        Args:  
-            call: Callback query object  
-        """  
         try:  
             await self.bot.answer_callback_query(call.id)  
               
-            # Parse callback data  
+            # إضافة تشخيص مؤقت  
+            print(f"Callback data received: {call.data}")  
+              
             parts = call.data.split(':')  
             action = parts[0]  
               
-            if action == 'repo_home':  
-                # Return to main repository view  
-                owner, repo = parts[1].split('/')  
-                await self._show_repo_main(call, owner, repo)  
+            if action in ['repo_tags', 'repo_contributors', 'repo_home', 'tag_releases', 'rel_assets']:  
+                data_hash = parts[1]  
+                print(f"Looking for hash: {data_hash}")  # للتشخيص  
+                data = CallbackDataManager.get_callback_data(data_hash)  
+                print(f"Retrieved data: {data}")  # للتشخيص  
                   
-            elif action in ['repo_tags', 'repo_contributors']:  
-                # Handle paginated content  
-                owner, repo = parts[1].split('/')  
-                page = int(parts[2]) if len(parts) > 2 else 1  
-                  
-                if action == 'repo_tags':  
-                    await self._show_tags(call, owner, repo, page)  
+                if not data:  
+                    await self.bot.answer_callback_query(call.id, "Session expired. Please try again.")  
+                    return  
+                      
+                if action == 'repo_home':  
+                    await self._show_repo_main(call, data['owner'], data['repo'])  
+                elif action == 'repo_tags':  
+                    await self._show_tags(call, data['owner'], data['repo'], data.get('page', 1))  
                 elif action == 'repo_contributors':  
-                    await self._show_contributors(call, owner, repo, page)  
-              
-            elif action == 'tag_releases':  
-                # Handle tag releases view  
-                owner, repo = parts[1].split('/')  
-                tag_name = parts[2]  
-                await self._show_tag_releases(call, owner, repo, tag_name)  
-              
-            elif action == 'release_assets':  
-                # Handle release assets view  
-                owner, repo = parts[1].split('/')  
-                release_id = int(parts[2])  
-                await self._show_release_assets(call, owner, repo, release_id)  
+                    await self._show_contributors(call, data['owner'], data['repo'], data.get('page', 1))  
+                elif action == 'tag_releases':  
+                    await self._show_tag_releases(call, data['owner'], data['repo'], data['tag_name'])  
+                elif action == 'rel_assets':  
+                    print(f"Calling _show_release_assets with: {data}")  # للتشخيص  
+                    await self._show_release_assets(call, data['owner'], data['repo'], data['release_id'])  
+            else:  
+                # إضافة معالجة للأزرار التي لا تستخدم نظام hash  
+                print(f"Unhandled action: {action}")  
+                await self.bot.answer_callback_query(call.id, f"Unknown action: {action}")  
                   
         except Exception as e:  
             print(f"Error in handle_repo_callback: {e}")  
-            await self.bot.answer_callback_query(call.id, "An error occurred. Please try again.")  
+            import traceback  
+            traceback.print_exc()  # طباعة تفاصيل الخطأ الكاملة  
+            await self.bot.answer_callback_query(call.id, "An error occurred.")
       
     async def handle_download_callback(self, call: CallbackQuery) -> None:  
-        """  
-        Handle download-related callback queries.  
-          
-        Args:  
-            call: Callback query object  
-        """  
+        """Handle download callbacks with compressed data."""  
         try:  
             await self.bot.answer_callback_query(call.id, "Starting download...")  
               
-            # Parse callback data  
             parts = call.data.split(':')  
-            asset_id = parts[1]  
-            asset_size = int(parts[2])  
-            owner, repo = parts[3].split('/')  
-              
-            # Check size limit  
-            max_size_bytes = config.MAX_DOWNLOAD_SIZE_MB * 1024 * 1024  
-            if asset_size > max_size_bytes:  
-                await self.bot.answer_callback_query(  
-                    call.id,   
-                    f"File too large ({asset_size / (1024*1024):.1f}MB). Max size: {config.MAX_DOWNLOAD_SIZE_MB}MB",  
-                    show_alert=True  
+            if parts[0] == 'dl_direct':  
+                data_hash = parts[1]  
+                data = CallbackDataManager.get_callback_data(data_hash)  
+                  
+                if not data:  
+                    await self.bot.answer_callback_query(call.id, "Session expired.")  
+                    return  
+                  
+                # Extract data  
+                asset_url = data['url']  
+                asset_size = data['size']  
+                asset_name = data['name']  
+                owner = data['owner']  
+                repo = data['repo']
+                
+                # Check size limit  
+                max_size_bytes = config.MAX_DOWNLOAD_SIZE_MB * 1024 * 1024  
+                if asset_size > max_size_bytes:  
+                    await self.bot.answer_callback_query(call.id, f"File too large...")  
+                    return  
+                
+                # Send NEW downloading message  
+                download_msg = await self.bot.send_message(  
+                    call.message.chat.id,  
+                    f"📥 Downloading {asset_name}... Please wait."  
                 )  
-                return  
-              
-            # TODO: Implement actual download functionality  
-            # This would require getting the asset download URL and using the download_asset method  
-            await self.bot.answer_callback_query(call.id, "Download feature coming soon!")  
-              
+                
+                # Download the file directly  
+                file_data = await self.github_api.download_asset(asset_url, asset_size)  
+                
+                if file_data:  
+                    await MessageUtils.send_document_from_bytes(  
+                        self.bot,  
+                        call.message.chat.id,  
+                        file_data,  
+                        asset_name,  
+                        f"Downloaded from {owner}/{repo}"  
+                    )  
+                    await self.bot.delete_message(call.message.chat.id, download_msg.message_id)  
+                    await self.bot.answer_callback_query(call.id, "✅ File downloaded successfully!")  
+                else:  
+                    await self.bot.edit_message_text(  
+                        "❌ Download failed. Please try again.",  
+                        call.message.chat.id,  
+                        download_msg.message_id  
+                    )  
+                
         except Exception as e:  
             print(f"Error in handle_download_callback: {e}")  
-            await self.bot.answer_callback_query(call.id, "Download failed. Please try again.")  
+            # Try to update the download message if it exists  
+            try:  
+                await self.bot.edit_message_text(  
+                    f"❌ Download failed: {str(e)}",  
+                    call.message.chat.id,  
+                    download_msg.message_id  
+                )  
+            except:  
+                pass  
+            await self.bot.answer_callback_query(call.id, "❌ Download failed.")
       
     async def _show_repo_main(self, call: CallbackQuery, owner: str, repo: str) -> None:  
         """Show main repository view."""  
