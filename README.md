@@ -1,9 +1,9 @@
 ### Configuration
-Required Environment Variables
+Required Environment Variables\
 BOT_TOKEN: Your Telegram bot token from @BotFather
 ### Optional Environment Variables
-GITHUB_TOKEN: GitHub Personal Access Token for higher rate limits
-Without token: 60 requests/hour
+GITHUB_TOKEN: GitHub Personal Access Token for higher rate limits\
+Without token: 60 requests/hour\
 With token: 5000 requests/hour
 
 ### Available Commands
@@ -18,6 +18,6 @@ With token: 5000 requests/hour
 ---
 # Development
 ### Requirements
-- Python 3.9+\
-- pyTelegramBotAPI 4.27.0+\
-- aiohttp for async HTTP requests
+Python 3.9+
+pyTelegramBotAPI 4.27.0+
+aiohttp for async HTTP requests
