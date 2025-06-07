@@ -2,10 +2,11 @@
 Message handlers for the GitHub Repository Preview Bot.  
 """  
 import asyncio  
-from typing import Optional  
-from telebot.async_telebot import AsyncTeleBot  
+from typing import Optional
+from telebot.async_telebot import AsyncTeleBot
 from telebot.types import Message, CallbackQuery  
 from telebot import types
+from telebot.util import validate_token  
   
 from github import GitHubAPI, RepoFormatter, UserFormatter  
 from github.formatter import URLParser  
@@ -135,18 +136,28 @@ You can use this command in several ways:
                 )  
                 return  
               
-            # Validate token format  
+            # Use pyTelegramBotAPI's validate_token function  
+            try:  
+                validate_token(token)  
+            except ValueError as e:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    f"❌ Invalid token format: {str(e)}"  
+                )  
+                return  
+              
+            # Additional GitHub token format validation  
             if not token.startswith(('ghp_', 'github_pat_')):  
                 await MessageUtils.safe_reply(  
                     self.bot,  
                     message,  
-                    "❌ Invalid token format. Please use a valid GitHub Personal Access Token."  
+                    "❌ Invalid GitHub token format. Please use a valid GitHub Personal Access Token."  
                 )  
                 return  
               
             # Test token validity  
             test_api = GitHubAPI(token=token)  
-            await test_api._setup_headers()  
             user_data = await test_api.get_authenticated_user()  
               
             if not user_data:  
@@ -217,7 +228,6 @@ You can use this command in several ways:
             if user_token:  
                 # Test token validity  
                 test_api = GitHubAPI(token=user_token)  
-                await test_api._setup_headers()  
                 user_data = await test_api.get_authenticated_user()  
                   
                 if user_data:  
@@ -378,7 +388,6 @@ You can use this command in several ways:
             
             # Use user's token for API calls  
             user_api = GitHubAPI(user_id=message.from_user.id, token_manager=self.token_manager)  
-            await user_api._setup_headers()  
 
             # Send typing action and loading message  
             await MessageUtils.send_typing_action(self.bot, message.chat.id)  
@@ -388,7 +397,7 @@ You can use this command in several ways:
                 return  
               
             # Get authenticated user info using the GitHub token  
-            user_data = await self.github_api.get_authenticated_user()  
+            user_data = await user_api.get_authenticated_user()
             if not user_data:  
                 await MessageUtils.safe_edit_message(  
                     self.bot,  
@@ -872,18 +881,22 @@ You can use this command in several ways:
                   
             # Format repository preview  
             preview = RepoFormatter.format_repository_preview(repo_data, languages, latest_release)  
-              
+            
+            # Get owner's avatar URL from repository data  
+            owner_avatar_url = repo_data.get('owner', {}).get('avatar_url',   
+                "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png")
+            
             # Create inline result  
-            result = types.InlineQueryResultArticle(  
-                id=f"repo_{owner}_{repo}",  
-                title=f"📦 {owner}/{repo}",  
-                description=repo_data.get('description', 'No description available')[:100],  
-                input_message_content=types.InputTextMessageContent(  
-                    message_text=preview,  
-                    parse_mode='HTML'  
-                ),  
-                thumbnail_url="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-            )  
+            result = types.InlineQueryResultArticle(    
+                id=f"repo_{owner}_{repo}",    
+                title=f"📦 {owner}/{repo}",    
+                description=repo_data.get('description', 'No description available')[:100],    
+                input_message_content=types.InputTextMessageContent(    
+                    message_text=preview,    
+                    parse_mode='HTML'    
+                ),    
+                thumbnail_url=owner_avatar_url  # Use owner's avatar instead of GitHub logo  
+            )
               
             await self.bot.answer_inline_query(inline_query.id, [result], cache_time=300)  
               
@@ -898,22 +911,25 @@ You can use this command in several ways:
             user_data = await self.github_api.get_user(username)  
             if not user_data:  
                 await self._show_inline_error(inline_query, "User not found")  
-                return  
+                return
                   
             # Format user information  
-            user_info = UserFormatter.format_user_info(user_data)  
+            user_info = UserFormatter.format_user_info(user_data) 
+            user_avatar_url = user_data.get('avatar_url',   
+                "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png")  
+            
               
             # Create inline result  
-            result = types.InlineQueryResultArticle(  
-                id=f"user_{username}",  
-                title=f"👤 {user_data.get('name', username)}",  
-                description=f"@{username} - {user_data.get('bio', 'No bio available')[:50]}",  
-                input_message_content=types.InputTextMessageContent(  
-                    message_text=user_info,  
-                    parse_mode='HTML'  
-                ),  
-                thumbnail_url="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" 
-            )  
+            result = types.InlineQueryResultArticle(    
+                id=f"user_{username}",    
+                title=f"👤 {user_data.get('name', username)}",    
+                description=f"@{username} - {user_data.get('bio', 'No bio available')[:50]}",    
+                input_message_content=types.InputTextMessageContent(    
+                    message_text=user_info,    
+                    parse_mode='HTML'    
+                ),    
+                thumbnail_url=user_avatar_url  # Use user's avatar  
+            )
               
             await self.bot.answer_inline_query(inline_query.id, [result], cache_time=300)  
               

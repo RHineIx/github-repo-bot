@@ -11,8 +11,29 @@ class RepositoryTracker:
       
     def __init__(self):  
         self.storage = StateMemoryStorage()  
-        self.tracked_repos: Dict[str, Dict] = {}  # repo_key -> repo_data  
-        self.user_subscriptions: Dict[int, Set[str]] = {}  # user_id -> set of repo_keys
+      
+    async def _get_tracked_repos(self) -> Dict[str, Dict]:  
+        """Get tracked repositories from storage."""  
+        data = await self.storage.get_data(chat_id=0, user_id=0)  
+        return data.get('tracked_repos', {})  
+      
+    async def _set_tracked_repos(self, tracked_repos: Dict[str, Dict]):  
+        """Store tracked repositories in storage."""  
+        await self.storage.set_data(chat_id=0, user_id=0, key='tracked_repos', value=tracked_repos)  
+      
+    async def _get_user_subscriptions(self) -> Dict[int, Set[str]]:  
+        """Get user subscriptions from storage."""  
+        data = await self.storage.get_data(chat_id=0, user_id=0)  
+        subscriptions = data.get('user_subscriptions', {})  
+        # Convert lists back to sets  
+        return {int(k): set(v) for k, v in subscriptions.items()}  
+      
+    async def _set_user_subscriptions(self, subscriptions: Dict[int, Set[str]]):  
+        """Store user subscriptions in storage."""  
+        # Convert sets to lists for JSON serialization  
+        serializable = {str(k): list(v) for k, v in subscriptions.items()}  
+        await self.storage.set_data(chat_id=0, user_id=0, key='user_subscriptions', value=serializable)
+        
 
     async def add_user_stars_tracking(self, user_id: int, github_username: str) -> bool:  
         """Add user's GitHub stars tracking."""  
@@ -67,19 +88,23 @@ class RepositoryTracker:
       
     async def remove_tracked_repo(self, user_id: int, owner: str, repo: str) -> bool:  
         """Remove repository from user's tracking list."""  
-        repo_key = self._get_repo_key(owner, repo)  
+       
+        track_types = ['releases', 'issues']  
           
-        if user_id in self.user_subscriptions:  
-            self.user_subscriptions[user_id].discard(repo_key)  
+        for track_type in track_types:  
+            repo_key = self._get_repo_key(owner, repo, track_type)  
               
-        if repo_key in self.tracked_repos:  
-            self.tracked_repos[repo_key]['subscribers'].discard(user_id)  
-              
-            # Remove repo if no subscribers  
-            if not self.tracked_repos[repo_key]['subscribers']:  
-                del self.tracked_repos[repo_key]  
+            if user_id in self.user_subscriptions:  
+                self.user_subscriptions[user_id].discard(repo_key)  
                   
-        return True  
+            if repo_key in self.tracked_repos:  
+                self.tracked_repos[repo_key]['subscribers'].discard(user_id)  
+                  
+                # Remove repo if no subscribers  
+                if not self.tracked_repos[repo_key]['subscribers']:  
+                    del self.tracked_repos[repo_key]  
+          
+        return True
       
     async def get_user_tracked_repos(self, user_id: int) -> List[Dict[str, str]]:  
         """Get list of repositories tracked by user."""  
@@ -90,12 +115,18 @@ class RepositoryTracker:
         for repo_key in self.user_subscriptions[user_id]:  
             if repo_key in self.tracked_repos:  
                 repo_data = self.tracked_repos[repo_key]  
+                  
+                
+                if repo_data.get('type') == 'stars':  
+                    continue  
+                      
                 repos.append({  
-                    'owner': repo_data['owner'],  
-                    'repo': repo_data['repo'],  
-                    'repo_key': repo_key  
+                    'owner': repo_data.get('owner', 'Unknown'),  
+                    'repo': repo_data.get('repo', 'Unknown'),  
+                    'repo_key': repo_key,  
+                    'track_type': repo_data.get('track_type', 'Unknown')  
                 })  
-        return repos  
+        return repos
       
     async def get_all_tracked_repos(self) -> List[Dict]:  
         """Get all tracked repositories for monitoring."""  

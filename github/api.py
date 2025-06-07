@@ -23,6 +23,16 @@ class GitHubAPI:
             }  
             if self.token:  
                 self.headers['Authorization'] = f'token {self.token}'
+
+    async def _setup_headers(self):  
+        """Setup headers for authenticated requests."""  
+        if self.token_manager and self.user_id:  
+            user_token = await self.token_manager.get_token(self.user_id)  
+            if user_token:  
+                self.token = user_token  
+                self.headers['Authorization'] = f'token {self.token}'  
+        elif self.token:  
+            self.headers['Authorization'] = f'token {self.token}'
       
     async def _make_request(self, endpoint: str) -> Optional[Dict[str, Any]]:  
         """  

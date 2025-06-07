@@ -6,6 +6,9 @@ import hashlib
 import json
 from typing import Optional, Callable, Any, Dict
 from telebot.async_telebot import AsyncTeleBot  
+import logging  
+  
+logger = logging.getLogger(__name__)  
   
   
 class MessageUtils:  
@@ -23,7 +26,7 @@ class MessageUtils:
         try:  
             await bot.send_chat_action(chat_id, 'typing')  
         except Exception as e:  
-            print(f"Failed to send typing action: {e}")  
+            logger.error(f"Failed to send typing action: {e}")
       
     @staticmethod  
     async def safe_edit_message(  
@@ -55,7 +58,7 @@ class MessageUtils:
             )  
             return True  
         except Exception as e:  
-            print(f"Failed to edit message: {e}")  
+            logger.error(f"Failed to edit message: {e}")  
             return False  
       
     @staticmethod  
@@ -80,7 +83,7 @@ class MessageUtils:
         try:  
             return await bot.reply_to(message, text, **kwargs)  
         except Exception as e:  
-            print(f"Failed to reply to message: {e}")  
+            logger.error(f"Failed to reply to message: {e}")  
             return None  
       
     @staticmethod  
@@ -129,9 +132,9 @@ class MessageUtils:
                     return func(*args, **kwargs)  
             except Exception as e:  
                 if attempt == max_retries:  
-                    print(f"Function failed after {max_retries} retries: {e}")  
+                    logger.error(f"Function failed after {max_retries} retries: {e}")  
                     return None  
-                print(f"Attempt {attempt + 1} failed, retrying in {delay}s: {e}")  
+                logger.error(f"Attempt {attempt + 1} failed, retrying in {delay}s: {e}")  
                 await asyncio.sleep(delay)  
         return None  
       
@@ -167,7 +170,7 @@ class MessageUtils:
                 caption=caption  
             )  
         except Exception as e:  
-            print(f"Failed to send document: {e}")  
+            logger.error(f"Failed to send document: {e}")  
             return None  
   
   
@@ -285,7 +288,7 @@ class CallbackDataManager:
             return None  
               
         except Exception as e:  
-            print(f"Error parsing callback data: {e}")  
+            logger.error(f"Error parsing callback data: {e}")  
             return None  
       
     @staticmethod  
@@ -311,5 +314,5 @@ class CallbackDataManager:
             }  
               
         except Exception as e:  
-            print(f"Error parsing download callback data: {e}")  
+            logger.error(f"Error parsing download callback data: {e}")  
             return None
