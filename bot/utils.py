@@ -8,6 +8,7 @@ import json
 from typing import Optional, Callable, Any, Dict
 from telebot.async_telebot import AsyncTeleBot
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -293,3 +294,77 @@ class CallbackDataManager:
         except Exception as e:
             logger.error(f"Error parsing download callback data: {e}")
             return None
+        
+
+class TrackCommandParser:  
+    """Parser for the enhanced /track command syntax."""  
+      
+    @staticmethod  
+    def parse_track_command(command_text: str) -> Optional[dict]:  
+        """  
+        Parse the enhanced /track command syntax.  
+          
+        Examples:  
+        - /track microsoft/vscode [releases,issues]  
+        - /track microsoft/vscode [releases] > -1001234567890  
+        - /track microsoft/vscode [issues] > -1001234567890/123  
+          
+        Returns:  
+            Dict with parsed components or None if invalid  
+        """  
+        # Remove /track command prefix  
+        args = command_text.replace('/track', '').strip()  
+          
+        # Pattern to match: owner/repo [preferences] [> destination]  
+        pattern = r'^([^/\s]+/[^/\s\[]+)\s*\[([^\]]+)\](?:\s*>\s*(.+))?$'  
+        match = re.match(pattern, args)  
+          
+        if not match:  
+            return None  
+              
+        repo_path, preferences_str, destination = match.groups()  
+          
+        # Parse repository  
+        repo_parts = repo_path.split('/')  
+        if len(repo_parts) != 2:  
+            return None  
+        owner, repo = repo_parts  
+          
+        # Parse preferences  
+        preferences = [p.strip() for p in preferences_str.split(',')]  
+        valid_preferences = ['releases', 'issues']  
+        preferences = [p for p in preferences if p in valid_preferences]  
+          
+        if not preferences:  
+            return None  
+              
+        # Parse destination  
+        chat_id = None  
+        thread_id = None  
+          
+        if destination:  
+            if '/' in destination:  
+                # Format: chat_id/thread_id  
+                dest_parts = destination.split('/')  
+                if len(dest_parts) == 2:  
+                    try:  
+                        chat_id = int(dest_parts[0])  
+                        thread_id = int(dest_parts[1])  
+                    except ValueError:  
+                        return None  
+                else:  
+                    return None  
+            else:  
+                # Format: chat_id only  
+                try:  
+                    chat_id = int(destination)  
+                except ValueError:  
+                    return None  
+          
+        return {  
+            'owner': owner,  
+            'repo': repo,  
+            'preferences': preferences,  
+            'chat_id': chat_id,  
+            'thread_id': thread_id  
+        }

@@ -15,6 +15,84 @@ class RepositoryTracker:
         self.storage = StateMemoryStorage()
         self.tracked_repos: Dict[str, Dict] = {}  # repo_key -> repo_data
         self.user_subscriptions: Dict[int, Set[str]] = {}  # user_id -> set of repo_keys
+        # New: Channel and topic subscriptions  
+        self.channel_subscriptions: Dict[int, Set[str]] = {}  # chat_id -> repo_keys  
+        self.topic_subscriptions: Dict[str, Set[str]] = {}    # "chat_id:topic_id" -> repo_keys  
+
+    def _get_destination_key(self, chat_id: Optional[int], thread_id: Optional[int]) -> str:  
+            """Generate key for destination (channel or topic)."""  
+            if chat_id and thread_id:  
+                return f"topic:{chat_id}:{thread_id}"  
+            elif chat_id:  
+                return f"channel:{chat_id}"  
+            else:  
+                return "user"  
+      
+    async def add_tracked_repo_with_destination(  
+        self,   
+        user_id: int,   
+        owner: str,   
+        repo: str,   
+        track_types: List[str],  
+        chat_id: Optional[int] = None,  
+        thread_id: Optional[int] = None  
+    ) -> bool:  
+        """Add repository tracking with optional destination."""  
+            
+        for track_type in track_types:  
+            repo_key = self._get_repo_key(owner, repo, track_type)  
+            destination_key = self._get_destination_key(chat_id, thread_id)  
+                
+            # Initialize repo tracking data if not exists  
+            if repo_key not in self.tracked_repos:  
+                self.tracked_repos[repo_key] = {  
+                    "owner": owner,  
+                    "repo": repo,  
+                    "track_type": track_type,  
+                    "last_release_id": None if track_type == "releases" else None,  
+                    "last_issue_id": None if track_type == "issues" else None,  
+                    "user_subscribers": set(),  
+                    "channel_subscribers": set(),  
+                    "topic_subscribers": set(),  
+                }  
+                
+            # Add subscriber based on destination type  
+            if chat_id and thread_id:  
+                # Topic subscription  
+                topic_key = f"{chat_id}:{thread_id}"  
+                if topic_key not in self.topic_subscriptions:  
+                    self.topic_subscriptions[topic_key] = set()  
+                self.topic_subscriptions[topic_key].add(repo_key)  
+                self.tracked_repos[repo_key]["topic_subscribers"].add(topic_key)  
+                    
+            elif chat_id:  
+                # Channel subscription  
+                if chat_id not in self.channel_subscriptions:  
+                    self.channel_subscriptions[chat_id] = set()  
+                self.channel_subscriptions[chat_id].add(repo_key)  
+                self.tracked_repos[repo_key]["channel_subscribers"].add(chat_id)  
+                    
+            else:  
+                # User subscription (default behavior)  
+                if user_id not in self.user_subscriptions:  
+                    self.user_subscriptions[user_id] = set()  
+                self.user_subscriptions[user_id].add(repo_key)  
+                self.tracked_repos[repo_key]["user_subscribers"].add(user_id)  
+            
+        return True
+    
+    async def migrate_legacy_data(self):  
+        """Migrate legacy repository data to new format."""  
+        for repo_key, repo_data in self.tracked_repos.items():  
+            # Check if this is legacy format  
+            if "subscribers" in repo_data and "user_subscribers" not in repo_data:  
+                # Migrate to new format  
+                legacy_subscribers = repo_data.pop("subscribers", set())  
+                repo_data["user_subscribers"] = legacy_subscribers  
+                repo_data["channel_subscribers"] = set()  
+                repo_data["topic_subscribers"] = set()  
+                  
+                print(f"Migrated legacy data for {repo_key}")
 
     async def add_user_stars_tracking(self, user_id: int, github_username: str) -> bool:
         """Add user's GitHub stars tracking."""

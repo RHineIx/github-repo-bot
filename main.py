@@ -4,14 +4,10 @@ Main entry point for the GitHub Repository Preview Bot.
 
 import asyncio
 import logging
-from dotenv import load_dotenv
 
 from telebot.async_telebot import AsyncTeleBot
 from bot import BotHandlers
 from config import config
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -32,9 +28,12 @@ async def main():
         # Initialize handlers
         handlers = BotHandlers(bot)
 
+        # Migrate legacy tracking data  
+        await handlers.tracker.migrate_legacy_data() 
+
         # Start monitoring task
         monitor_task = asyncio.create_task(
-            handlers.monitor.start_monitoring(interval=300)
+            handlers.monitor.start_monitoring(interval=30)
         )  # Check every 5 minutes
 
         logger.info("GitHub Repository Preview Bot started successfully!")
