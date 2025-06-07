@@ -5,6 +5,7 @@ import asyncio
 from typing import Optional  
 from telebot.async_telebot import AsyncTeleBot  
 from telebot.types import Message, CallbackQuery  
+from telebot import types
   
 from github import GitHubAPI, RepoFormatter, UserFormatter  
 from github.formatter import URLParser  
@@ -48,7 +49,9 @@ class BotHandlers:
         #Token manager handlers
         self.bot.message_handler(commands=['settoken'])(self.handle_set_token)  
         self.bot.message_handler(commands=['removetoken'])(self.handle_remove_token)  
-        self.bot.message_handler(commands=['tokeninfo'])(self.handle_token_info)  
+        self.bot.message_handler(commands=['tokeninfo'])(self.handle_token_info)
+        #inline query handler
+        self.bot.inline_handler(lambda query: True)(self.handle_inline_query)  
         
         #callback query handlers  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('repo_'))(self.handle_repo_callback)  
@@ -814,3 +817,144 @@ You can use this command in several ways:
         except Exception as e:  
             print(f"Error in handle_notifications: {e}")  
             await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+
+    async def handle_inline_query(self, inline_query) -> None:  
+        """Handle inline queries for repo and user previews."""  
+        try:  
+            query_text = inline_query.query.strip()  
+              
+            if not query_text:  
+                # Show help when query is empty  
+                await self._show_inline_help(inline_query)  
+                return  
+                  
+            # Parse query for .repo or .user commands  
+            if query_text.startswith('.repo '):  
+                await self._handle_inline_repo(inline_query, query_text[6:])  
+            elif query_text.startswith('.user '):  
+                await self._handle_inline_user(inline_query, query_text[6:])  
+            else:  
+                await self._show_inline_help(inline_query)  
+                  
+        except Exception as e:  
+            print(f"Error in handle_inline_query: {e}")  
+            await self._show_inline_error(inline_query)
+
+    async def _handle_inline_repo(self, inline_query, repo_input: str) -> None:  
+        """Handle inline repository queries."""  
+        try:  
+            # Parse repository URL or name  
+            parsed = URLParser.parse_repo_input(repo_input)  
+            if not parsed:  
+                await self._show_inline_error(inline_query, "Invalid repository format")  
+                return  
+                  
+            owner, repo = parsed  
+              
+            # Fetch repository data  
+            repo_data = await self.github_api.get_repository(owner, repo)  
+            if not repo_data:  
+                await self._show_inline_error(inline_query, "Repository not found")  
+                return  
+                  
+            # Fetch additional data concurrently  
+            languages_task = self.github_api.get_repository_languages(owner, repo)  
+            release_task = self.github_api.get_latest_release(owner, repo)  
+              
+            languages, latest_release = await asyncio.gather(  
+                languages_task, release_task, return_exceptions=True  
+            )  
+              
+            if isinstance(languages, Exception):  
+                languages = None  
+            if isinstance(latest_release, Exception):  
+                latest_release = None  
+                  
+            # Format repository preview  
+            preview = RepoFormatter.format_repository_preview(repo_data, languages, latest_release)  
+              
+            # Create inline result  
+            result = types.InlineQueryResultArticle(  
+                id=f"repo_{owner}_{repo}",  
+                title=f"📦 {owner}/{repo}",  
+                description=repo_data.get('description', 'No description available')[:100],  
+                input_message_content=types.InputTextMessageContent(  
+                    message_text=preview,  
+                    parse_mode='HTML'  
+                ),  
+                thumbnail_url="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+            )  
+              
+            await self.bot.answer_inline_query(inline_query.id, [result], cache_time=300)  
+              
+        except Exception as e:  
+            print(f"Error in _handle_inline_repo: {e}")  
+            await self._show_inline_error(inline_query)
+
+    async def _handle_inline_user(self, inline_query, username: str) -> None:  
+        """Handle inline user queries."""  
+        try:  
+            # Fetch user data  
+            user_data = await self.github_api.get_user(username)  
+            if not user_data:  
+                await self._show_inline_error(inline_query, "User not found")  
+                return  
+                  
+            # Format user information  
+            user_info = UserFormatter.format_user_info(user_data)  
+              
+            # Create inline result  
+            result = types.InlineQueryResultArticle(  
+                id=f"user_{username}",  
+                title=f"👤 {user_data.get('name', username)}",  
+                description=f"@{username} - {user_data.get('bio', 'No bio available')[:50]}",  
+                input_message_content=types.InputTextMessageContent(  
+                    message_text=user_info,  
+                    parse_mode='HTML'  
+                ),  
+                thumbnail_url="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" 
+            )  
+              
+            await self.bot.answer_inline_query(inline_query.id, [result], cache_time=300)  
+              
+        except Exception as e:  
+            print(f"Error in _handle_inline_user: {e}")  
+            await self._show_inline_error(inline_query)
+
+    async def _show_inline_help(self, inline_query) -> None:  
+        """Show inline help message."""  
+        help_result = types.InlineQueryResultArticle(  
+            id="help",
+            title="🤖 GitHub Bot - Help",  
+            description="Use .repo owner/repo or .user username",  
+            input_message_content=types.InputTextMessageContent(  
+                message_text="""
+🤖 <b>GitHub Repository Preview Bot - Inline Mode</b>  
+
+📋 <b>Available Commands:</b>  
+• <code>.repo owner/repo</code> - Get repository preview  
+• <code>.repo https://github.com/owner/repo</code> - Get repository preview  
+• <code>.user username</code> - Get user information  
+
+💡 <b>Examples:</b>  
+• <code>.repo microsoft/vscode</code>  
+• <code>.user torvalds</code>""",  
+                parse_mode='HTML'  
+            )  
+        )  
+          
+        await self.bot.answer_inline_query(inline_query.id, [help_result], cache_time=60)  
+      
+    async def _show_inline_error(self, inline_query, error_msg: str = "An error occurred") -> None:  
+        """Show inline error message."""  
+        error_result = types.InlineQueryResultArticle(  
+            id="error",  
+            title="❌ Error",  
+            description=error_msg,  
+            input_message_content=types.InputTextMessageContent(  
+                message_text=f"❌ <b>Error:</b> {error_msg}",  
+                parse_mode='HTML'  
+            )  
+        )  
+          
+        await self.bot.answer_inline_query(inline_query.id, [error_result], cache_time=10)
