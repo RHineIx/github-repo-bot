@@ -2,11 +2,10 @@
 Message handlers for the GitHub Repository Preview Bot.  
 """  
 import asyncio  
-from typing import Optional
-from telebot.async_telebot import AsyncTeleBot
+from typing import Optional  
+from telebot.async_telebot import AsyncTeleBot  
 from telebot.types import Message, CallbackQuery  
 from telebot import types
-from telebot.util import validate_token  
   
 from github import GitHubAPI, RepoFormatter, UserFormatter  
 from github.formatter import URLParser  
@@ -133,17 +132,19 @@ You can use this command in several ways:
                     self.bot,  
                     message,  
                     "❌ Please provide your GitHub token.\n\n💡 Example: <code>/settoken ghp_xxxxxxxxxxxx</code>\n\n⚠️ <b>Security Note:</b> Delete this message after setting the token!"  
-                )  
+                )
+            
                 return  
               
-            # Use pyTelegramBotAPI's validate_token function  
-            try:  
-                validate_token(token)  
-            except ValueError as e:  
+            # Test token validity  
+            test_api = GitHubAPI(token=token)  
+            user_data = await test_api.get_authenticated_user()  
+              
+            if not user_data:  
                 await MessageUtils.safe_reply(  
                     self.bot,  
                     message,  
-                    f"❌ Invalid token format: {str(e)}"  
+                    "❌ Invalid token. Please check your GitHub token and try again."  
                 )  
                 return  
               
@@ -153,7 +154,7 @@ You can use this command in several ways:
                     self.bot,  
                     message,  
                     "❌ Invalid GitHub token format. Please use a valid GitHub Personal Access Token."  
-                )  
+                )
                 return  
               
             # Test token validity  
@@ -881,7 +882,7 @@ You can use this command in several ways:
                   
             # Format repository preview  
             preview = RepoFormatter.format_repository_preview(repo_data, languages, latest_release)  
-            
+
             # Get owner's avatar URL from repository data  
             owner_avatar_url = repo_data.get('owner', {}).get('avatar_url',   
                 "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png")

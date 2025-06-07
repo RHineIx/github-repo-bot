@@ -11,29 +11,8 @@ class RepositoryTracker:
       
     def __init__(self):  
         self.storage = StateMemoryStorage()  
-      
-    async def _get_tracked_repos(self) -> Dict[str, Dict]:  
-        """Get tracked repositories from storage."""  
-        data = await self.storage.get_data(chat_id=0, user_id=0)  
-        return data.get('tracked_repos', {})  
-      
-    async def _set_tracked_repos(self, tracked_repos: Dict[str, Dict]):  
-        """Store tracked repositories in storage."""  
-        await self.storage.set_data(chat_id=0, user_id=0, key='tracked_repos', value=tracked_repos)  
-      
-    async def _get_user_subscriptions(self) -> Dict[int, Set[str]]:  
-        """Get user subscriptions from storage."""  
-        data = await self.storage.get_data(chat_id=0, user_id=0)  
-        subscriptions = data.get('user_subscriptions', {})  
-        # Convert lists back to sets  
-        return {int(k): set(v) for k, v in subscriptions.items()}  
-      
-    async def _set_user_subscriptions(self, subscriptions: Dict[int, Set[str]]):  
-        """Store user subscriptions in storage."""  
-        # Convert sets to lists for JSON serialization  
-        serializable = {str(k): list(v) for k, v in subscriptions.items()}  
-        await self.storage.set_data(chat_id=0, user_id=0, key='user_subscriptions', value=serializable)
-        
+        self.tracked_repos: Dict[str, Dict] = {}  # repo_key -> repo_data  
+        self.user_subscriptions: Dict[int, Set[str]] = {}  # user_id -> set of repo_keys
 
     async def add_user_stars_tracking(self, user_id: int, github_username: str) -> bool:  
         """Add user's GitHub stars tracking."""  
