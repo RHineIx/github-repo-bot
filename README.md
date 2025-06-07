@@ -97,3 +97,7 @@ python main.py
 - Callback data compression for navigation  
 - Comprehensive error handling  
 - Safe download size limits
+
+---
+
+- [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/RHineIx/github-repo-bot)
