@@ -5,23 +5,22 @@ import asyncio
 import logging  
 from dotenv import load_dotenv  
   
-from telebot.async_telebot import AsyncTeleBot  
-from bot import MessageUtils
-from bot import BotHandlers  
-from config import config 
+from telebot.async_telebot import AsyncTeleBot
+from bot import BotHandlers
+from config import config
 
 # Load environment variables  
-load_dotenv()  
+load_dotenv()
 
 # Configure logging  
-logging.basicConfig(  
-    level=logging.INFO,  
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )  
-logger = logging.getLogger(__name__)  
-  
-  
-async def main():  
+logger = logging.getLogger(__name__)
+
+
+async def main():
     """Main function to start the bot."""  
     try:  
         # Validate configuration  
@@ -34,7 +33,7 @@ async def main():
         handlers = BotHandlers(bot)
 
         # Start monitoring task  
-        monitor_task = asyncio.create_task(handlers.monitor.start_monitoring(interval=30))  # Check every 5 minutes  
+        monitor_task = asyncio.create_task(handlers.monitor.start_monitoring(interval=300))  # Check every 5 minutes  
           
         logger.info("GitHub Repository Preview Bot started successfully!")
         logger.info("Repository monitoring started!")

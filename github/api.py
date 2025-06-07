@@ -8,23 +8,31 @@ from config import config
   
   
 class GitHubAPI:  
-    """Asynchronous GitHub API client."""  
+    """Asynchronous GitHub API client with per-user token support."""  
       
-    def __init__(self, token: Optional[str] = None):  
-        """  
-        Initialize GitHub API client.  
-          
-        Args:  
-            token: GitHub personal access token (optional)  
-        """  
-        self.token = token or config.GITHUB_TOKEN  
+    def __init__(self, token: Optional[str] = None, user_id: Optional[int] = None, token_manager=None):  
+        self.token_manager = token_manager  
+        self.user_id = user_id  
+        self.token = token  
         self.base_url = config.GITHUB_API_BASE  
+        self._setup_headers()  
+      
+    async def _setup_headers(self):  
+        """Setup headers with appropriate token."""  
+        if self.user_id and self.token_manager:  
+            user_token = await self.token_manager.get_token(self.user_id)  
+            if user_token:  
+                self.token = user_token  
+          
+        if not self.token:  
+            self.token = config.GITHUB_TOKEN  # Fallback to default  
+          
         self.headers = {  
             'Accept': 'application/vnd.github.v3+json',  
             'User-Agent': 'GitHub-Repo-Preview-Bot/1.0'  
         }  
         if self.token:  
-            self.headers['Authorization'] = f'token {self.token}'  
+            self.headers['Authorization'] = f'token {self.token}'
       
     async def _make_request(self, endpoint: str) -> Optional[Dict[str, Any]]:  
         """  

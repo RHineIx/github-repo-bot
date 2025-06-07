@@ -13,6 +13,7 @@ from config import config
 
 from .database import RepositoryTracker
 from .monitor import RepositoryMonitor
+from .token_manager import TokenManager  
 
 class BotHandlers:  
     """Contains all message handlers for the bot."""  
@@ -25,7 +26,9 @@ class BotHandlers:
             bot: AsyncTeleBot instance  
         """  
         self.bot = bot  
-        self.github_api = GitHubAPI()  
+        self.github_api = GitHubAPI()
+        self.token_manager = TokenManager()  
+        self.github_api = GitHubAPI(token_manager=self.token_manager)
         self.tracker = RepositoryTracker()  
         self.monitor = RepositoryMonitor(self.github_api, self.tracker, self.bot)  
         self.register_handlers()  
@@ -42,6 +45,10 @@ class BotHandlers:
         self.bot.message_handler(commands=['tracked'])(self.handle_tracked)
         self.bot.message_handler(commands=['notifications'])(self.handle_notifications)
         self.bot.message_handler(commands=['trackme'])(self.handle_trackme)
+        #Token manager handlers
+        self.bot.message_handler(commands=['settoken'])(self.handle_set_token)  
+        self.bot.message_handler(commands=['removetoken'])(self.handle_remove_token)  
+        self.bot.message_handler(commands=['tokeninfo'])(self.handle_token_info)  
         
         #callback query handlers  
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('repo_'))(self.handle_repo_callback)  
@@ -111,8 +118,129 @@ You can use this command in several ways:
   
 ❓ If you encounter any issues, make sure the repository URL or name is correct.  
 """
-        await MessageUtils.safe_reply(self.bot, message, help_text)  
-      
+        await MessageUtils.safe_reply(self.bot, message, help_text)
+    
+    async def handle_set_token(self, message: Message) -> None:  
+        """Handle /settoken command to store user's GitHub token."""  
+        try:  
+            token = MessageUtils.validate_command_args(message.text)  
+            if not token:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Please provide your GitHub token.\n\n💡 Example: <code>/settoken ghp_xxxxxxxxxxxx</code>\n\n⚠️ <b>Security Note:</b> Delete this message after setting the token!"  
+                )  
+                return  
+              
+            # Validate token format  
+            if not token.startswith(('ghp_', 'github_pat_')):  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Invalid token format. Please use a valid GitHub Personal Access Token."  
+                )  
+                return  
+              
+            # Test token validity  
+            test_api = GitHubAPI(token=token)  
+            await test_api._setup_headers()  
+            user_data = await test_api.get_authenticated_user()  
+              
+            if not user_data:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Invalid token. Please check your GitHub token and try again."  
+                )  
+                return  
+              
+            # Store token  
+            success = await self.token_manager.store_token(message.from_user.id, token)  
+              
+            if success:  
+                username = user_data.get('login', 'Unknown')  
+                  
+                # Send success message  
+                success_msg = await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    f"✅ <b>Token Set Successfully!</b>\n\n👤 Authenticated as: <b>@{username}</b>\n\nYou can now use advanced features like <code>/trackme</code>!"  
+                )  
+                  
+                # Delete the original /settoken message for security  
+                try:  
+                    await self.bot.delete_message(message.chat.id, message.message_id)  
+                except Exception as e:  
+                    print(f"Failed to delete settoken message: {e}")  
+                      
+            else:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Failed to store token. Please try again."  
+                )  
+                  
+        except Exception as e:  
+            print(f"Error in handle_set_token: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+    
+    async def handle_remove_token(self, message: Message) -> None:  
+        """Handle /removetoken command to remove user's GitHub token."""  
+        try:  
+            success = await self.token_manager.remove_token(message.from_user.id)  
+              
+            if success:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "✅ <b>Token Removed Successfully!</b>\n\nYour GitHub token has been deleted from our system."  
+                )  
+            else:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ Failed to remove token or no token was found."  
+                )  
+                  
+        except Exception as e:  
+            print(f"Error in handle_remove_token: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+
+    async def handle_token_info(self, message: Message) -> None:  
+        """Handle /tokeninfo command to show user's token status."""  
+        try:  
+            user_token = await self.token_manager.get_token(message.from_user.id)  
+              
+            if user_token:  
+                # Test token validity  
+                test_api = GitHubAPI(token=user_token)  
+                await test_api._setup_headers()  
+                user_data = await test_api.get_authenticated_user()  
+                  
+                if user_data:  
+                    username = user_data.get('login', 'Unknown')  
+                    await MessageUtils.safe_reply(  
+                        self.bot,  
+                        message,  
+                        f"✅ <b>Token Status: Active</b>\n\n👤 Authenticated as: <b>@{username}</b>\n\nYour GitHub token is valid and working."  
+                    )  
+                else:  
+                    await MessageUtils.safe_reply(  
+                        self.bot,  
+                        message,  
+                        "⚠️ <b>Token Status: Invalid</b>\n\nYour stored token appears to be invalid. Please set a new token with <code>/settoken</code>."  
+                    )  
+            else:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ <b>No Token Set</b>\n\nYou haven't set a GitHub token yet. Use <code>/settoken your_github_token</code> to get started."  
+                )  
+                  
+        except Exception as e:  
+            print(f"Error in handle_token_info: {e}")  
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+
     async def handle_repo(self, message: Message) -> None:  
         """  
         Handle /repo command.  
@@ -233,8 +361,22 @@ You can use this command in several ways:
             await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)  
 
     async def handle_trackme(self, message: Message) -> None:  
-        """Handle /trackme command to track user's personal GitHub stars automatically."""  
+        """Handle /trackme command using user's personal token."""  
         try:  
+            # Check if user has set a token  
+            user_token = await self.token_manager.get_token(message.from_user.id)  
+            if not user_token:  
+                await MessageUtils.safe_reply(  
+                    self.bot,  
+                    message,  
+                    "❌ <b>GitHub Token Required</b>\n\nTo use this feature, you need to set your personal GitHub token first.\n\nUse: <code>/settoken your_github_token</code>"  
+                )  
+                return  
+            
+            # Use user's token for API calls  
+            user_api = GitHubAPI(user_id=message.from_user.id, token_manager=self.token_manager)  
+            await user_api._setup_headers()  
+
             # Send typing action and loading message  
             await MessageUtils.send_typing_action(self.bot, message.chat.id)  
             wait_msg = await MessageUtils.safe_reply(self.bot, message, "🔍 Setting up personal stars tracking...")  
