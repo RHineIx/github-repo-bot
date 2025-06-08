@@ -31,7 +31,6 @@ class BotHandlers:
         self.bot = bot
         self.github_api = GitHubAPI()
         self.token_manager = TokenManager()
-        self.github_api = GitHubAPI()
         self.tracker = RepositoryTracker()
         self.monitor = RepositoryMonitor(self.github_api, self.tracker, self.bot)
         self.register_handlers()

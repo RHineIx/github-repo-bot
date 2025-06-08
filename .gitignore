@@ -1,6 +1,5 @@
 /.env
 **/__pycache__
 /.gitignore
-/token_encryption.key
-/user_tokens.db
-user_tokens.db
+*.key
+*.db

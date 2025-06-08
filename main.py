@@ -33,7 +33,7 @@ async def main():
 
         # Start monitoring task
         monitor_task = asyncio.create_task(
-            handlers.monitor.start_monitoring(interval=30)
+            handlers.monitor.start_monitoring(interval=300)
         )  # Check every 5 minutes
 
         logger.info("GitHub Repository Preview Bot started successfully!")
