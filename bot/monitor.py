@@ -1,7 +1,6 @@
-# rhineix/github-repo-bot/github-repo-bot-353a356069cb9a7c65f342d5b42fee8862333925/bot/monitor.py
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from github import GitHubAPI
 from .database import RepositoryTracker
 from .token_manager import TokenManager
@@ -65,11 +64,35 @@ class RepositoryMonitor:
             elif track_type == "issues":
                 await self._check_issues(repo_data)
 
+    async def _get_api_client_for_repo(self, repo_data: Dict) -> Optional[GitHubAPI]:
+        """
+        Gets an authenticated API client ONLY if a subscribed user has a token.
+        Returns None if no token is found, effectively disabling fallback to global token.
+        """
+        all_user_subscribers = repo_data.get("user_subscribers", set())
+
+        for user_id in all_user_subscribers:
+            user_token = await self.token_manager.get_token(user_id)
+            if user_token:
+                owner = repo_data.get("owner", "N/A")
+                repo = repo_data.get("repo", "N/A")
+                logger.info(f"Using token from user {user_id} to check {owner}/{repo}")
+                return GitHubAPI(token=user_token)  # Return new client immediately
+
+        # If the loop finishes, no subscribed user had a token.
+        return None
+
     async def _check_releases(self, repo_data: Dict):
-        """Check for new releases."""
+        """Check for new releases, REQUIRES a user-specific token."""
         owner, repo = repo_data["owner"], repo_data["repo"]
+        api_client = await self._get_api_client_for_repo(repo_data)
+
+        if not api_client:
+            logger.warning(f"Skipping release check for {owner}/{repo}: No subscribed user has provided a token.")
+            return  # STOP if no specific token is found
+
         last_release_id = repo_data.get("last_release_id")
-        latest_release = await self.github_api.get_latest_release(owner, repo)
+        latest_release = await api_client.get_latest_release(owner, repo)
 
         if latest_release:
             current_release_id = str(latest_release.get("id"))
@@ -79,10 +102,16 @@ class RepositoryMonitor:
                     await self._send_release_notifications(repo_data, latest_release)
 
     async def _check_issues(self, repo_data: Dict):
-        """Check for new issues."""
+        """Check for new issues, REQUIRES a user-specific token."""
         owner, repo = repo_data["owner"], repo_data["repo"]
+        api_client = await self._get_api_client_for_repo(repo_data)
+
+        if not api_client:
+            logger.warning(f"Skipping issue check for {owner}/{repo}: No subscribed user has provided a token.")
+            return  # STOP if no specific token is found
+
         last_issue_id = repo_data.get("last_issue_id")
-        latest_issues = await self.github_api.get_repository_issues(owner, repo, state="open", per_page=1)
+        latest_issues = await api_client.get_repository_issues(owner, repo, state="open", per_page=1)
 
         if latest_issues:
             latest_issue = latest_issues[0]

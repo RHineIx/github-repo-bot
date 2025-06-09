@@ -168,18 +168,6 @@ In any chat, type:
 
                 return
 
-            # Test token validity
-            test_api = GitHubAPI(token=token)
-            user_data = await test_api.get_authenticated_user()
-
-            if not user_data:
-                await MessageUtils.safe_reply(
-                    self.bot,
-                    message,
-                    "❌ Invalid token. Please check your GitHub token and try again.",
-                )
-                return
-
             # Additional GitHub token format validation
             if not token.startswith(("ghp_", "github_pat_")):
                 await MessageUtils.safe_reply(
@@ -910,7 +898,17 @@ In any chat, type:
                     f"✅ Now tracking <b>{owner}/{repo}</b> for <code>{preferences_text}</code>\n"  
                     f"📍 Notifications will be sent to: {destination_text}\n\n"  
                     f"🔔 You'll receive notifications when new {preferences_text} are available."  
-                )  
+                )
+                
+                # --- warning if the user has no token and is tracking to self ---
+                if not chat_id: # Only warn if tracking to their own DM
+                    user_has_token = await self.token_manager.token_exists(message.from_user.id)
+                    if not user_has_token:
+                        success_message += (
+                            '\n\n⚠️ <b>Important Note:</b> You have not set your personal GitHub token. '
+                            'Alerts will only work if another user tracking this repository has set their token. '
+                            'Use <code>/settoken</code> to ensure this feature works.'
+                        )
                   
                 await self.bot.reply_to(message, success_message, parse_mode='HTML')  
                   
@@ -923,7 +921,6 @@ In any chat, type:
         except Exception as e:  
             logger.error(f"Error in track command: {e}")  
             await self.bot.reply_to(message, "❌ An error occurred while processing your request. Please try again.")
-
     async def handle_untrack(self, message: Message) -> None:
         """Handle /untrack command to stop tracking a repository."""
         try:
@@ -1154,7 +1151,7 @@ In any chat, type:
         )
 
         await self.bot.answer_inline_query(
-            inline_query.id, [help_result], cache_time=60
+            inline_query.id, [help_result], cache_time=300
         )
 
     async def _show_inline_error(
