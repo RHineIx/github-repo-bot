@@ -50,6 +50,8 @@ class GitHubAPI:
         Returns:
             JSON response data or None if request failed
         """
+        await self._setup_headers()
+        
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
         async with aiohttp.ClientSession(

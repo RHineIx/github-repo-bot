@@ -1,216 +1,248 @@
-"""
-Database management for repository tracking.
-"""
-
+import aiosqlite
 import json
-import asyncio
+import logging
 from typing import Dict, List, Optional, Set
-from telebot.asyncio_storage import StateMemoryStorage
 
+logger = logging.getLogger(__name__)
 
 class RepositoryTracker:
-    """Manages tracked repositories and user subscriptions."""
+    """
+    Manages tracked repositories and user subscriptions using a persistent SQLite database.
+    """
 
-    def __init__(self):
-        self.storage = StateMemoryStorage()
-        self.tracked_repos: Dict[str, Dict] = {}  # repo_key -> repo_data
-        self.user_subscriptions: Dict[int, Set[str]] = {}  # user_id -> set of repo_keys
-        # New: Channel and topic subscriptions  
-        self.channel_subscriptions: Dict[int, Set[str]] = {}  # chat_id -> repo_keys  
-        self.topic_subscriptions: Dict[str, Set[str]] = {}    # "chat_id:topic_id" -> repo_keys  
+    def __init__(self, db_path: str = "tracking.db"):
+        self.db_path = db_path
+        self._db_initialized = False
 
-    def _get_destination_key(self, chat_id: Optional[int], thread_id: Optional[int]) -> str:  
-            """Generate key for destination (channel or topic)."""  
-            if chat_id and thread_id:  
-                return f"topic:{chat_id}:{thread_id}"  
-            elif chat_id:  
-                return f"channel:{chat_id}"  
-            else:  
-                return "user"  
-      
-    async def add_tracked_repo_with_destination(  
-        self,   
-        user_id: int,   
-        owner: str,   
-        repo: str,   
-        track_types: List[str],  
-        chat_id: Optional[int] = None,  
-        thread_id: Optional[int] = None  
-    ) -> bool:  
-        """Add repository tracking with optional destination."""  
-            
-        for track_type in track_types:  
-            repo_key = self._get_repo_key(owner, repo, track_type)  
-            destination_key = self._get_destination_key(chat_id, thread_id)  
+    async def init_db(self):
+        """
+        Initializes the database and creates tables if they don't exist.
+        """
+        if self._db_initialized:
+            return
+
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                # Main table for tracked items (repos, stars)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS tracked_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        item_key TEXT UNIQUE NOT NULL, -- e.g., 'owner/repo:releases' or 'stars:username'
+                        item_type TEXT NOT NULL, -- 'repo' or 'stars'
+                        owner TEXT,
+                        repo TEXT,
+                        github_username TEXT,
+                        track_type TEXT, -- 'releases', 'issues', or null for stars
+                        last_release_id TEXT,
+                        last_issue_id TEXT,
+                        last_starred_repo_ids_json TEXT -- Storing set as JSON
+                    )
+                """)
+
+                # Table for subscriptions (linking users/channels to items)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS subscriptions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        item_id INTEGER NOT NULL,
+                        subscriber_id TEXT NOT NULL, -- user_id, channel_id, or topic_key
+                        subscriber_type TEXT NOT NULL, -- 'user', 'channel', 'topic'
+                        FOREIGN KEY (item_id) REFERENCES tracked_items (id) ON DELETE CASCADE
+                    )
+                """)
+                await conn.commit()
+            self._db_initialized = True
+            logger.info("Tracking database initialized successfully.")
+        except Exception as e:
+            logger.error(f"Error initializing tracking database: {e}")
+            raise
+
+    def _get_item_key(self, **kwargs) -> str:
+        """Generates a unique key for a trackable item."""
+        if kwargs.get('type') == 'stars':
+            return f"stars:{kwargs['github_username']}"
+        else:
+            return f"{kwargs['owner']}/{kwargs['repo']}:{kwargs['track_type']}"
+
+    async def add_tracked_repo_with_destination(
+        self,
+        user_id: int,
+        owner: str,
+        repo: str,
+        track_types: List[str],
+        chat_id: Optional[int] = None,
+        thread_id: Optional[int] = None,
+    ) -> bool:
+        """Adds repository tracking with optional destination to the database."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            for track_type in track_types:
+                item_key = self._get_item_key(owner=owner, repo=repo, track_type=track_type)
+
+                # 1. Find or create the tracked_item
+                cursor = await conn.execute("SELECT id FROM tracked_items WHERE item_key = ?", (item_key,))
+                item = await cursor.fetchone()
+
+                if not item:
+                    await conn.execute(
+                        "INSERT INTO tracked_items (item_key, item_type, owner, repo, track_type) VALUES (?, ?, ?, ?, ?)",
+                        (item_key, 'repo', owner, repo, track_type)
+                    )
+                    await conn.commit()
+                    cursor = await conn.execute("SELECT id FROM tracked_items WHERE item_key = ?", (item_key,))
+                    item = await cursor.fetchone()
                 
-            # Initialize repo tracking data if not exists  
-            if repo_key not in self.tracked_repos:  
-                self.tracked_repos[repo_key] = {  
-                    "owner": owner,  
-                    "repo": repo,  
-                    "track_type": track_type,  
-                    "last_release_id": None if track_type == "releases" else None,  
-                    "last_issue_id": None if track_type == "issues" else None,  
-                    "user_subscribers": set(),  
-                    "channel_subscribers": set(),  
-                    "topic_subscribers": set(),  
-                }  
+                item_id = item[0]
+
+                # 2. Determine subscriber type and ID
+                if chat_id and thread_id:
+                    subscriber_type = 'topic'
+                    subscriber_id = f"{chat_id}:{thread_id}"
+                elif chat_id:
+                    subscriber_type = 'channel'
+                    subscriber_id = str(chat_id)
+                else:
+                    subscriber_type = 'user'
+                    subscriber_id = str(user_id)
                 
-            # Add subscriber based on destination type  
-            if chat_id and thread_id:  
-                # Topic subscription  
-                topic_key = f"{chat_id}:{thread_id}"  
-                if topic_key not in self.topic_subscriptions:  
-                    self.topic_subscriptions[topic_key] = set()  
-                self.topic_subscriptions[topic_key].add(repo_key)  
-                self.tracked_repos[repo_key]["topic_subscribers"].add(topic_key)  
-                    
-            elif chat_id:  
-                # Channel subscription  
-                if chat_id not in self.channel_subscriptions:  
-                    self.channel_subscriptions[chat_id] = set()  
-                self.channel_subscriptions[chat_id].add(repo_key)  
-                self.tracked_repos[repo_key]["channel_subscribers"].add(chat_id)  
-                    
-            else:  
-                # User subscription (default behavior)  
-                if user_id not in self.user_subscriptions:  
-                    self.user_subscriptions[user_id] = set()  
-                self.user_subscriptions[user_id].add(repo_key)  
-                self.tracked_repos[repo_key]["user_subscribers"].add(user_id)  
-            
+                # 3. Add subscription if it doesn't exist
+                await conn.execute(
+                    "INSERT OR IGNORE INTO subscriptions (item_id, subscriber_id, subscriber_type) VALUES (?, ?, ?)",
+                    (item_id, subscriber_id, subscriber_type)
+                )
+                await conn.commit()
         return True
-    
-    async def migrate_legacy_data(self):  
-        """Migrate legacy repository data to new format."""  
-        for repo_key, repo_data in self.tracked_repos.items():  
-            # Check if this is legacy format  
-            if "subscribers" in repo_data and "user_subscribers" not in repo_data:  
-                # Migrate to new format  
-                legacy_subscribers = repo_data.pop("subscribers", set())  
-                repo_data["user_subscribers"] = legacy_subscribers  
-                repo_data["channel_subscribers"] = set()  
-                repo_data["topic_subscribers"] = set()  
-                  
-                print(f"Migrated legacy data for {repo_key}")
 
     async def add_user_stars_tracking(self, user_id: int, github_username: str) -> bool:
-        """Add user's GitHub stars tracking."""
-        tracking_key = f"stars:{github_username}"
+        """Adds user's GitHub stars tracking to the database."""
+        item_key = self._get_item_key(type='stars', github_username=github_username)
+        async with aiosqlite.connect(self.db_path) as conn:
+            # 1. Find or create the tracked_item for stars
+            cursor = await conn.execute("SELECT id FROM tracked_items WHERE item_key = ?", (item_key,))
+            item = await cursor.fetchone()
 
-        if user_id not in self.user_subscriptions:
-            self.user_subscriptions[user_id] = set()
+            if not item:
+                await conn.execute(
+                    "INSERT INTO tracked_items (item_key, item_type, github_username, last_starred_repo_ids_json) VALUES (?, ?, ?, ?)",
+                    (item_key, 'stars', github_username, json.dumps(None)) # Initialize with null
+                )
+                await conn.commit()
+                cursor = await conn.execute("SELECT id FROM tracked_items WHERE item_key = ?", (item_key,))
+                item = await cursor.fetchone()
 
-        self.user_subscriptions[user_id].add(tracking_key)
+            item_id = item[0]
 
-        if tracking_key not in self.tracked_repos:
-            self.tracked_repos[tracking_key] = {
-                "type": "stars",
-                "github_username": github_username,
-                "last_starred_repo_ids": None,  # Initialize as None for the first run
-                "subscribers": {user_id},
-            }
-        else:
-            self.tracked_repos[tracking_key]["subscribers"].add(user_id)
-
-        return True
-
-    def _get_repo_key(self, owner: str, repo: str, track_type: str) -> str:
-        """Generate unique key for repository with tracking type."""
-        return f"{owner}/{repo}:{track_type}"
-
-    async def add_tracked_repo(
-        self, user_id: int, owner: str, repo: str, track_types: List[str]
-    ) -> bool:
-        """Add repository to user's tracking list with specified types."""
-        for track_type in track_types:
-            repo_key = self._get_repo_key(owner, repo, track_type)
-
-            # Initialize user subscriptions if not exists
-            if user_id not in self.user_subscriptions:
-                self.user_subscriptions[user_id] = set()
-
-            # Add to user's subscriptions
-            self.user_subscriptions[user_id].add(repo_key)
-
-            # Initialize repo tracking data if not exists
-            if repo_key not in self.tracked_repos:
-                self.tracked_repos[repo_key] = {
-                    "owner": owner,
-                    "repo": repo,
-                    "track_type": track_type,
-                    "last_release_id": None if track_type == "releases" else None,
-                    "last_issue_id": None if track_type == "issues" else None,
-                    "subscribers": set(),
-                }
-
-            # Add user to repo subscribers
-            self.tracked_repos[repo_key]["subscribers"].add(user_id)
+            # 2. Add user subscription
+            await conn.execute(
+                "INSERT OR IGNORE INTO subscriptions (item_id, subscriber_id, subscriber_type) VALUES (?, ?, ?)",
+                (item_id, str(user_id), 'user')
+            )
+            await conn.commit()
         return True
 
     async def remove_tracked_repo(self, user_id: int, owner: str, repo: str) -> bool:
-        """Remove repository from user's tracking list."""
-
-        track_types = ["releases", "issues"]
-
-        for track_type in track_types:
-            repo_key = self._get_repo_key(owner, repo, track_type)
-
-            if user_id in self.user_subscriptions:
-                self.user_subscriptions[user_id].discard(repo_key)
-
-            if repo_key in self.tracked_repos:
-                self.tracked_repos[repo_key]["subscribers"].discard(user_id)
-
-                # Remove repo if no subscribers
-                if not self.tracked_repos[repo_key]["subscribers"]:
-                    del self.tracked_repos[repo_key]
-
+        """Removes a user's subscription to all track types for a repo."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            # We only remove the user's subscription, not the tracked item itself,
+            # as others might still be tracking it.
+            for track_type in ["releases", "issues"]:
+                item_key = self._get_item_key(owner=owner, repo=repo, track_type=track_type)
+                await conn.execute("""
+                    DELETE FROM subscriptions
+                    WHERE subscriber_id = ? AND subscriber_type = 'user' AND item_id = (
+                        SELECT id FROM tracked_items WHERE item_key = ?
+                    )
+                """, (str(user_id), item_key))
+            await conn.commit()
+        # We can add a cleanup task later to remove tracked_items with no subscriptions.
         return True
 
     async def get_user_tracked_repos(self, user_id: int) -> List[Dict[str, str]]:
-        """Get list of repositories tracked by user."""
-        if user_id not in self.user_subscriptions:
-            return []
-
+        """Gets list of repositories tracked by a specific user from the database."""
         repos = []
-        for repo_key in self.user_subscriptions[user_id]:
-            if repo_key in self.tracked_repos:
-                repo_data = self.tracked_repos[repo_key]
-
-                if repo_data.get("type") == "stars":
-                    continue
-
-                repos.append(
-                    {
-                        "owner": repo_data.get("owner", "Unknown"),
-                        "repo": repo_data.get("repo", "Unknown"),
-                        "repo_key": repo_key,
-                        "track_type": repo_data.get("track_type", "Unknown"),
-                    }
-                )
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute("""
+                SELECT ti.owner, ti.repo, ti.track_type
+                FROM tracked_items ti
+                JOIN subscriptions s ON ti.id = s.item_id
+                WHERE s.subscriber_id = ? AND s.subscriber_type = 'user' AND ti.item_type = 'repo'
+            """, (str(user_id),))
+            rows = await cursor.fetchall()
+            unique_repos = {}
+            for row in rows:
+                repo_key = f"{row['owner']}/{row['repo']}"
+                if repo_key not in unique_repos:
+                    unique_repos[repo_key] = {"owner": row["owner"], "repo": row["repo"]}
+            repos = list(unique_repos.values())
         return repos
 
     async def get_all_tracked_repos(self) -> List[Dict]:
-        """Get all tracked repositories for monitoring."""
-        return list(self.tracked_repos.values())
+        """Gets all tracked items and their subscribers for the monitor."""
+        all_items = []
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            
+            # 1. Get all tracked items
+            items_cursor = await conn.execute("SELECT * FROM tracked_items")
+            items_rows = await items_cursor.fetchall()
+            
+            # 2. For each item, get its subscribers
+            for item_row in items_rows:
+                item_dict = dict(item_row)
+                
+                # Initialize subscriber sets
+                item_dict["user_subscribers"] = set()
+                item_dict["channel_subscribers"] = set()
+                item_dict["topic_subscribers"] = set()
+                # For stars tracking, it uses a generic 'subscribers' key. We'll populate that too.
+                item_dict["subscribers"] = set()
+                
+                subs_cursor = await conn.execute("SELECT subscriber_id, subscriber_type FROM subscriptions WHERE item_id = ?", (item_dict['id'],))
+                subs_rows = await subs_cursor.fetchall()
+                
+                for sub_row in subs_rows:
+                    sub_type = sub_row['subscriber_type']
+                    sub_id = sub_row['subscriber_id']
+                    
+                    if sub_type == 'user':
+                        user_id = int(sub_id)
+                        item_dict["user_subscribers"].add(user_id)
+                        item_dict["subscribers"].add(user_id) # For stars tracking
+                    elif sub_type == 'channel':
+                        item_dict["channel_subscribers"].add(int(sub_id))
+                    elif sub_type == 'topic':
+                        item_dict["topic_subscribers"].add(sub_id)
+
+                # Decode the JSON field for starred repos
+                if item_dict.get('last_starred_repo_ids_json'):
+                    ids_json = item_dict.pop('last_starred_repo_ids_json')
+                    # Set can't be JSON serialized, so they were stored as list. Convert back.
+                    deserialized = json.loads(ids_json)
+                    item_dict['last_starred_repo_ids'] = set(deserialized) if deserialized is not None else None
+
+
+                all_items.append(item_dict)
+
+        return all_items
+
+    async def _update_field(self, item_key: str, field_name: str, value: any):
+        """Generic helper to update a single field for a tracked item."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(
+                f"UPDATE tracked_items SET {field_name} = ? WHERE item_key = ?",
+                (value, item_key)
+            )
+            await conn.commit()
 
     async def update_last_release(self, owner: str, repo: str, release_id: str):
-        """Update last known release ID for repository."""
-        # Find the repo key for releases tracking
-        repo_key = f"{owner}/{repo}:releases"
-        if repo_key in self.tracked_repos:
-            self.tracked_repos[repo_key]["last_release_id"] = release_id
+        item_key = self._get_item_key(owner=owner, repo=repo, track_type='releases')
+        await self._update_field(item_key, "last_release_id", release_id)
 
     async def update_last_issue(self, owner: str, repo: str, issue_id: str):
-        """Update last known issue ID for repository."""
-        # Find the repo key for issues tracking
-        repo_key = f"{owner}/{repo}:issues"
-        if repo_key in self.tracked_repos:
-            self.tracked_repos[repo_key]["last_issue_id"] = issue_id
+        item_key = self._get_item_key(owner=owner, repo=repo, track_type='issues')
+        await self._update_field(item_key, "last_issue_id", issue_id)
 
     async def update_last_starred_repo_ids(self, github_username: str, starred_repo_ids: set):
-        """Update the last known set of starred repository IDs for a user."""
-        tracking_key = f"stars:{github_username}"
-        if tracking_key in self.tracked_repos:
-            self.tracked_repos[tracking_key]["last_starred_repo_ids"] = starred_repo_ids
+        item_key = self._get_item_key(type='stars', github_username=github_username)
+        # We must serialize the set to a JSON string (as a list) to store it.
+        value_to_store = json.dumps(list(starred_repo_ids))
+        await self._update_field(item_key, "last_starred_repo_ids_json", value_to_store)

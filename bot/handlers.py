@@ -32,7 +32,7 @@ class BotHandlers:
         self.github_api = GitHubAPI()
         self.token_manager = TokenManager()
         self.tracker = RepositoryTracker()
-        self.monitor = RepositoryMonitor(self.github_api, self.tracker, self.bot)
+        self.monitor = RepositoryMonitor(self.github_api, self.tracker, self.token_manager, self.bot)
         self.register_handlers()
 
     def register_handlers(self) -> None:
@@ -873,7 +873,7 @@ In any chat, type:
                 preferences,  
                 chat_id,  
                 thread_id  
-            )  
+            )
               
             if success:  
                 # Format success message  
