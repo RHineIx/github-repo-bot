@@ -107,11 +107,12 @@ class RepositoryTracker:
             self.tracked_repos[tracking_key] = {
                 "type": "stars",
                 "github_username": github_username,
-                "last_starred_repos": set(),
-                "subscribers": set(),
+                "last_starred_repo_ids": None,  # Initialize as None for the first run
+                "subscribers": {user_id},
             }
+        else:
+            self.tracked_repos[tracking_key]["subscribers"].add(user_id)
 
-        self.tracked_repos[tracking_key]["subscribers"].add(user_id)
         return True
 
     def _get_repo_key(self, owner: str, repo: str, track_type: str) -> str:
@@ -208,10 +209,8 @@ class RepositoryTracker:
         if repo_key in self.tracked_repos:
             self.tracked_repos[repo_key]["last_issue_id"] = issue_id
 
-    async def update_last_starred_repos(
-        self, github_username: str, starred_repo_ids: set
-    ):
-        """Update last known starred repository IDs for user."""
+    async def update_last_starred_repo_ids(self, github_username: str, starred_repo_ids: set):
+        """Update the last known set of starred repository IDs for a user."""
         tracking_key = f"stars:{github_username}"
         if tracking_key in self.tracked_repos:
-            self.tracked_repos[tracking_key]["last_starred_repos"] = starred_repo_ids
+            self.tracked_repos[tracking_key]["last_starred_repo_ids"] = starred_repo_ids

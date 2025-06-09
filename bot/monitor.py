@@ -258,37 +258,67 @@ class RepositoryMonitor:
   
         return message  
   
-    async def _check_stars_updates(self, repo_data: Dict):  
-        """Check for new starred repositories using authenticated user endpoint."""  
-        github_username = repo_data["github_username"]  
-        last_starred_repos = repo_data.get("last_starred_repos", set())  
-  
-        # Get latest starred repos using authenticated endpoint  
-        starred_repos = await self.github_api.get_authenticated_user_starred_repos(  
-            page=1, per_page=10  
-        )  
-  
-        if starred_repos:  
-            current_starred_ids = {str(repo.get("id")) for repo in starred_repos}  
-            new_starred_ids = current_starred_ids - last_starred_repos  
-  
-            if (  
-                new_starred_ids and last_starred_repos  
-            ):  # Only notify if we had previous data  
-                # Find the new starred repositories  
-                new_repos = [  
-                    repo  
-                    for repo in starred_repos  
-                    if str(repo.get("id")) in new_starred_ids  
-                ]  
-  
-                for new_repo in new_repos:  
-                    await self._send_starred_repo_notification(repo_data, new_repo)  
-  
-            # Update stored starred repos  
-            await self.tracker.update_last_starred_repos(  
-                github_username, current_starred_ids  
+    async def _check_stars_updates(self, repo_data: Dict):
+        """
+        Check for new starred repositories using a robust ID-based comparison.
+        This method is resistant to false positives when repositories are unstarred.
+        """
+        github_username = repo_data.get("github_username")
+        if not github_username:
+            logger.warning(f"Stars tracking data is missing github_username: {repo_data}")
+            return
+
+        # Get the set of repo IDs from the last successful check.
+        last_known_ids = repo_data.get("last_starred_repo_ids")
+
+        try:
+            # Fetch the current list of most recently starred repositories.
+            current_page_repos = await self.github_api.get_authenticated_user_starred_repos(
+                page=1, per_page=30
             )
+        except Exception as e:
+            logger.error(f"Failed to fetch starred repos for {github_username}: {e}")
+            return
+
+        if not current_page_repos:
+            # If the user has no stars, we clear our stored state.
+            if last_known_ids is not None:
+                await self.tracker.update_last_starred_repo_ids(github_username, set())
+            return
+
+        current_page_ids = {str(repo.get("id")) for repo in current_page_repos}
+
+        # If this is the first time checking, we just establish a baseline.
+        if last_known_ids is None:
+            await self.tracker.update_last_starred_repo_ids(github_username, current_page_ids)
+            logger.info(f"Initialized star tracking for {github_username}. Baseline set with {len(current_page_ids)} repos.")
+            return
+
+        # --- Core Logic ---
+        # We iterate through the new list (from newest to oldest) and collect
+        # any repos that were not in our last known set of IDs.
+        truly_new_repos = []
+        for repo in current_page_repos:
+            repo_id = str(repo.get("id"))
+            if repo_id not in last_known_ids:
+                # This ID is not in the last set we saw, so it's a new star.
+                truly_new_repos.append(repo)
+            else:
+                # We found a repo that we already knew about. Since the list is
+                # sorted by newness, we can be sure that everything after this
+                # point is also old. We can stop looking.
+                break
+
+        # If we found any new repos, notify the user.
+        if truly_new_repos:
+            # Reverse the list to send notifications in chronological order.
+            truly_new_repos.reverse()
+            for new_repo in truly_new_repos:
+                logger.info(f"Detected new star for {github_username}: {new_repo.get('full_name')}")
+                await self._send_starred_repo_notification(repo_data, new_repo)
+
+        # After every check, update the state to the latest set of IDs. This is crucial.
+        await self.tracker.update_last_starred_repo_ids(github_username, current_page_ids)
 
     async def _send_starred_repo_notification(  
             self, repo_data: Dict, starred_repo: Dict  
