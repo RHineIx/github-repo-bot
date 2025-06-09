@@ -168,18 +168,6 @@ In any chat, type:
 
                 return
 
-            # Test token validity
-            test_api = GitHubAPI(token=token)
-            user_data = await test_api.get_authenticated_user()
-
-            if not user_data:
-                await MessageUtils.safe_reply(
-                    self.bot,
-                    message,
-                    "❌ Invalid token. Please check your GitHub token and try again.",
-                )
-                return
-
             # Additional GitHub token format validation
             if not token.startswith(("ghp_", "github_pat_")):
                 await MessageUtils.safe_reply(
