@@ -198,43 +198,62 @@ class RepositoryMonitor:
             await self._send_notifications_to_all_subscribers(repo_data, preview_text)
 
     def _format_release_notification(self, owner: str, repo: str, release_data: Dict) -> str:
-        """Formats release notification message using the original style."""
+        """Formats release notification message with more details."""
         tag_name = release_data.get("tag_name", "Unknown")
         html_url = release_data.get("html_url", "")
         published_at = release_data.get("published_at", "")
-        
-        date_str = ""
-        if published_at:
-            date_str = f"🗓️ Published: {published_at.split('T')[0]}\n"
+        release_name = release_data.get("name") or tag_name
+        author = release_data.get("author", {})
+        author_login = author.get("login", "N/A")
+        author_url = author.get("html_url", "")
+        is_prerelease = release_data.get("prerelease", False)
+        assets_count = len(release_data.get("assets", []))
+        body = release_data.get("body", "No description provided.")
 
-        return f"""
-🔔 <b>New Release Available!</b>
+        # Truncate body
+        if len(body) > 500:
+            body = body[:500] + "..."
+        elif not body:
+            body = "No release notes provided."
 
-📦 Repository: <b>{owner}/{repo}</b>
-✅ Version: <b>{tag_name}</b>
+        date_str = f"🗓️ <b>Date:</b> {published_at.split('T')[0]}" if published_at else ""
+        prerelease_badge = "⚠️ <b>Status:</b> Pre-release\n" if is_prerelease else ""
+
+        message = f"""🔔 <b>New Release: {release_name}</b>
+in 📦 <a href="https://github.com/{owner}/{repo}">{owner}/{repo}</a>
+
+<blockquote expandable>{body}</blockquote>
+
+{prerelease_badge}👤 <b>Published by:</b> <a href="{author_url}">{author_login}</a>
+✅ <b>Version:</b> <code>{tag_name}</code>
+📄 <b>Assets:</b> {assets_count} downloadable file(s)
 {date_str}
-<a href="{html_url}">View Release</a>
-"""
 
-    def _format_issue_notification(self, owner: str, repo: str, issue_data: Dict) -> str:
-        """Formats issue notification message using the original style."""
-        title = issue_data.get("title", "Unknown")
-        number = issue_data.get("number", "Unknown")
-        user = issue_data.get("user", {})
-        author = user.get("login", "Unknown") if user else "Unknown"
-        author_url = user.get("html_url", "") if user else ""
-        html_url = issue_data.get("html_url", "")
-        body = issue_data.get("body", "No description provided.")
+🔗 <a href="{html_url}">View Full Release & Download</a>"""
+        return message.strip()
 
-        if len(body) > 300:
-            body = body[:300] + "..."
+    def _format_issue_notification(  
+        self, owner: str, repo: str, issue_data: Dict  
+    ) -> str:  
+        """Format issue notification message with improved layout."""  
+        title = issue_data.get("title", "Unknown")  
+        number = issue_data.get("number", "Unknown")  
+        user = issue_data.get("user", {})  
+        author = user.get("login", "Unknown") if user else "Unknown"  
+        author_url = user.get("html_url", "") if user else ""  
+        html_url = issue_data.get("html_url", "")  
+        body = issue_data.get("body", "No description provided.")  
+  
+        # Truncate body if too long  
+        if len(body) > 500:  
+            body = body[:500] + "..."  
+  
+        # Format the message according to your specification  
+        message = f"""🪲 <a href="{author_url}">{author}</a> opened issue <code>{repo}#{number}</code>  
 
-        return f"""
-🐞 <a href="{author_url}">{author}</a> opened issue <code>{repo}#{number}</code>
-
-<blockquote expandable>Title: {title}
+    <blockquote expandable>Title: {title}  
 {body}</blockquote>
-
-🔗 <a href="{html_url}">View Issue</a>
-#openedissue
-"""
+  
+🔗 <a href="{html_url}">View Issue</a>  
+#openedissue"""  
+        return message.strip()
