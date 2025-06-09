@@ -29,6 +29,9 @@ class Config:
     # Request timeout
     REQUEST_TIMEOUT: int = 30
 
+    # Cache settings
+    CACHE_TTL_SECONDS: int = 600  # Cache API responses for 10 minutes
+
     # Download settings
     MAX_DOWNLOAD_SIZE_MB: int = 50  # Maximum file size for direct download
     ITEMS_PER_PAGE: int = 5  # Number of items to show per page

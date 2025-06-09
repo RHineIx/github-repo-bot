@@ -246,3 +246,16 @@ class RepositoryTracker:
         # We must serialize the set to a JSON string (as a list) to store it.
         value_to_store = json.dumps(list(starred_repo_ids))
         await self._update_field(item_key, "last_starred_repo_ids_json", value_to_store)
+    
+    async def count_user_subscriptions(self, user_id: int) -> int:
+        """Counts how many items a specific user is subscribed to."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            # We count distinct tracked items to avoid counting 'releases' and 'issues' for the same repo twice.
+            cursor = await conn.execute("""
+                SELECT COUNT(DISTINCT ti.id)
+                FROM tracked_items ti
+                JOIN subscriptions s ON ti.id = s.item_id
+                WHERE s.subscriber_id = ? AND s.subscriber_type = 'user'
+            """, (str(user_id),))
+            result = await cursor.fetchone()
+            return result[0] if result else 0

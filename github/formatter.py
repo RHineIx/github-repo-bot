@@ -100,7 +100,7 @@ class RepoFormatter:
 <blockquote>⭐ Stars: <b>{stars} </b> | 🍴 Forks: <b>{forks} </b> | 🪲 Open Issues: <b>{issues}</b></blockquote>
   
 🚀 <b>Latest Release:</b> {release_info}  
-💻 <b>Lang's:</b> {languages_text}
+💻 <b>Lang's:</b> {languages_text}\n
 🔗 <a href='{html_url}'>View Repo</a>  
   
 {topics_text}"""  

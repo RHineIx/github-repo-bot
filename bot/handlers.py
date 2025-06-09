@@ -3,6 +3,7 @@ Message handlers for the GitHub Repository Preview Bot.
 """
 
 import asyncio
+from datetime import datetime, timedelta
 from typing import Optional
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import Message, CallbackQuery
@@ -41,6 +42,7 @@ class BotHandlers:
         self.bot.message_handler(commands=["help"])(self.handle_help)
         self.bot.message_handler(commands=["repo"])(self.handle_repo)
         self.bot.message_handler(commands=["user"])(self.handle_user)
+        self.bot.message_handler(commands=["status"])(self.handle_status)
         # tracking handlers
         self.bot.message_handler(commands=['track'])(self.handle_track_command)  
         self.bot.message_handler(commands=["untrack"])(self.handle_untrack)
@@ -50,7 +52,6 @@ class BotHandlers:
         # Token manager handlers
         self.bot.message_handler(commands=["settoken"])(self.handle_set_token)
         self.bot.message_handler(commands=["removetoken"])(self.handle_remove_token)
-        self.bot.message_handler(commands=["tokeninfo"])(self.handle_token_info)
         # inline query handler
         self.bot.inline_handler(lambda query: True)(self.handle_inline_query)
 
@@ -131,7 +132,6 @@ Type /help for detailed instructions 📖
 🔧 <b>Advanced Settings:</b>  
 • <code>/settoken your_github_token</code> - Connect account  
 • /trackme - Track your new stars  
-• <code>/tokeninfo</code> - Check token status  
 • <code>/removetoken</code> - Remove token  
   
 🌟 <b>Inline Mode:</b>  
@@ -251,39 +251,60 @@ In any chat, type:
             print(f"Error in handle_remove_token: {e}")
             await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
 
-    async def handle_token_info(self, message: Message) -> None:
-        """Handle /tokeninfo command to show user's token status."""
+    async def handle_status(self, message: Message) -> None:
+        """Handle /status command to show bot and user status."""
+        wait_msg = await MessageUtils.safe_reply(self.bot, message, "🔍 Fetching status...")
+        if not wait_msg:
+            return
+
+        user_id = message.from_user.id
+        user_api = GitHubAPI(user_id=user_id, token_manager=self.token_manager)
+
         try:
-            user_token = await self.token_manager.get_token(message.from_user.id)
+            # Fetch data concurrently
+            rate_limit_task = user_api.get_rate_limit()
+            user_data_task = user_api.get_authenticated_user()
+            tracked_count_task = self.tracker.count_user_subscriptions(user_id)
 
-            if user_token:
-                # Test token validity
-                test_api = GitHubAPI(token=user_token)
-                user_data = await test_api.get_authenticated_user()
+            results = await asyncio.gather(rate_limit_task, user_data_task, tracked_count_task, return_exceptions=True)
+            
+            rate_limit_data, user_data, tracked_count = results
 
-                if user_data:
-                    username = user_data.get("login", "Unknown")
-                    await MessageUtils.safe_reply(
-                        self.bot,
-                        message,
-                        f"✅ <b>Token Status: Active</b>\n\n👤 Authenticated as: <b>@{username}</b>\n\nYour GitHub token is valid and working.",
-                    )
-                else:
-                    await MessageUtils.safe_reply(
-                        self.bot,
-                        message,
-                        "⚠️ <b>Token Status: Invalid</b>\n\nYour stored token appears to be invalid. Please set a new token with <code>/settoken</code>.",
-                    )
+            # --- Formatting the message ---
+            status_text = "📊 <b>Bot Status</b>\n\n✅ Operational\n\n"
+
+            if isinstance(user_data, dict): # Check if token is valid and user data was fetched
+                status_text += f"👤 <b>GitHub Account:</b> @{user_data.get('login', 'N/A')}\n"
+                status_text += "🔑 <b>Token Status:</b> Valid\n\n"
             else:
-                await MessageUtils.safe_reply(
-                    self.bot,
-                    message,
-                    "❌ <b>No Token Set</b>\n\nYou haven't set a GitHub token yet. Use <code>/settoken your_github_token</code> to get started.",
-                )
+                status_text += "⚠️ <b>No valid GitHub Token found.</b>\n"
+                status_text += "You are using the public rate limit. For a higher limit (5000 requests/hour), please set your personal token with <code>/settoken</code>.\n\n"
+
+            if isinstance(rate_limit_data, dict):
+                core_limit = rate_limit_data.get('resources', {}).get('core', {})
+                remaining = core_limit.get('remaining', 'N/A')
+                limit = core_limit.get('limit', 'N/A')
+                reset_timestamp = core_limit.get('reset')
+
+                status_text += f"📈 <b>API Rate Limit:</b>\n"
+                status_text += f" - Remaining: {remaining} / {limit} requests\n"
+
+                if reset_timestamp:
+                    reset_time = datetime.fromtimestamp(reset_timestamp)
+                    time_diff = reset_time - datetime.now()
+                    minutes_left = round(time_diff.total_seconds() / 60)
+                    status_text += f" - Resets in: {minutes_left} minutes\n\n"
+            
+            if isinstance(tracked_count, int):
+                status_text += "📋 <b>Your Subscriptions:</b>\n"
+                status_text += f" - Tracking: {tracked_count} items (repositories and stars)"
+
+            await MessageUtils.safe_edit_message(self.bot, wait_msg.chat.id, wait_msg.message_id, status_text)
 
         except Exception as e:
-            print(f"Error in handle_token_info: {e}")
-            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+            logger.error(f"Error in handle_status: {e}")
+            await MessageUtils.safe_edit_message(self.bot, wait_msg.chat.id, wait_msg.message_id, ErrorMessages.API_ERROR)
+
 
     async def handle_repo(self, message: Message) -> None:
         """

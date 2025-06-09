@@ -1,15 +1,15 @@
-"""
-GitHub API client for fetching repository and user information.
-"""
-
+# rhineix/github-repo-bot/github-repo-bot-353a356069cb9a7c65f342d5b42fee8862333925/github/api.py
 import aiohttp
 import asyncio
+import time
+import logging
 from typing import Optional, Dict, Any, List
 from config import config
 
+logger = logging.getLogger(__name__)
 
 class GitHubAPI:
-    """Asynchronous GitHub API client with per-user token support."""
+    """Asynchronous GitHub API client with per-user token support and caching."""
 
     def __init__(
         self,
@@ -21,6 +21,10 @@ class GitHubAPI:
         self.user_id = user_id
         self.token = token or config.GITHUB_TOKEN
         self.base_url = config.GITHUB_API_BASE
+
+        # Caching mechanism
+        self._cache = {}
+        self.cache_ttl = config.CACHE_TTL_SECONDS
 
         # Set up basic headers synchronously
         self.headers = {
@@ -40,18 +44,23 @@ class GitHubAPI:
         elif self.token:
             self.headers["Authorization"] = f"token {self.token}"
 
+    def _check_cache(self, key: str) -> Optional[Any]:
+        """Checks if a valid (non-expired) entry exists in the cache."""
+        if key in self._cache:
+            cached_time, cached_data = self._cache[key]
+            if time.time() - cached_time < self.cache_ttl:
+                logger.info(f"Cache hit for key: {key}")
+                return cached_data
+        logger.info(f"Cache miss for key: {key}")
+        return None
+
+    def _update_cache(self, key: str, data: Any):
+        """Updates the cache with new data."""
+        self._cache[key] = (time.time(), data)
+
     async def _make_request(self, endpoint: str) -> Optional[Dict[str, Any]]:
-        """
-        Make an HTTP request to GitHub API.
-
-        Args:
-            endpoint: API endpoint path
-
-        Returns:
-            JSON response data or None if request failed
-        """
+        """Make an HTTP request to GitHub API."""
         await self._setup_headers()
-        
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
         async with aiohttp.ClientSession(
@@ -61,162 +70,98 @@ class GitHubAPI:
                 async with session.get(url, headers=self.headers) as response:
                     if response.status == 200:
                         return await response.json()
-                    elif response.status == 404:
-                        return None
                     else:
-                        print(
-                            f"GitHub API error: {response.status} - {await response.text()}"
-                        )
+                        logger.error(f"GitHub API error: {response.status} - {await response.text()} for URL {url}")
                         return None
             except asyncio.TimeoutError:
-                print(f"Request timeout for: {url}")
+                logger.error(f"Request timeout for: {url}")
                 return None
             except Exception as e:
-                print(f"Request error for {url}: {e}")
+                logger.error(f"Request error for {url}: {e}")
                 return None
 
     async def get_repository(self, owner: str, repo: str) -> Optional[Dict[str, Any]]:
-        """
-        Get repository information.
+        """Get repository information, with caching."""
+        cache_key = f"repo:{owner}/{repo}"
+        cached_data = self._check_cache(cache_key)
+        if cached_data:
+            return cached_data
+        
+        live_data = await self._make_request(f"repos/{owner}/{repo}")
+        if live_data:
+            self._update_cache(cache_key, live_data)
+        return live_data
 
-        Args:
-            owner: Repository owner username
-            repo: Repository name
+    async def get_repository_languages(self, owner: str, repo: str) -> Optional[Dict[str, int]]:
+        """Get repository programming languages, with caching."""
+        cache_key = f"languages:{owner}/{repo}"
+        cached_data = self._check_cache(cache_key)
+        if cached_data:
+            return cached_data
 
-        Returns:
-            Repository data or None if not found
-        """
-        return await self._make_request(f"repos/{owner}/{repo}")
+        live_data = await self._make_request(f"repos/{owner}/{repo}/languages")
+        if live_data:
+            self._update_cache(cache_key, live_data)
+        return live_data
 
-    async def get_repository_languages(
-        self, owner: str, repo: str
-    ) -> Optional[Dict[str, int]]:
-        """
-        Get repository programming languages with byte counts.
+    async def get_latest_release(self, owner: str, repo: str) -> Optional[Dict[str, Any]]:
+        """Get latest release information. We don't cache this heavily to keep it fresh."""
+        # A shorter TTL can be used here if needed, but for simplicity we use the global TTL.
+        cache_key = f"latest_release:{owner}/{repo}"
+        cached_data = self._check_cache(cache_key)
+        if cached_data:
+            return cached_data
+        
+        live_data = await self._make_request(f"repos/{owner}/{repo}/releases/latest")
+        if live_data:
+            self._update_cache(cache_key, live_data)
+        return live_data
 
-        Args:
-            owner: Repository owner username
-            repo: Repository name
+    async def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        """Get user information, with caching."""
+        cache_key = f"user:{username}"
+        cached_data = self._check_cache(cache_key)
+        if cached_data:
+            return cached_data
 
-        Returns:
-            Language data with byte counts or None if not found
-        """
-        return await self._make_request(f"repos/{owner}/{repo}/languages")
+        live_data = await self._make_request(f"users/{username}")
+        if live_data:
+            self._update_cache(cache_key, live_data)
+        return live_data
 
-    async def get_latest_release(
-        self, owner: str, repo: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Get latest release information.
+    async def get_rate_limit(self) -> Optional[Dict[str, Any]]:
+        """Gets the current rate limit status. This is NOT cached."""
+        return await self._make_request("rate_limit")
 
-        Args:
-            owner: Repository owner username
-            repo: Repository name
+    # --- Methods below are generally not cached as they are user-specific or paginated ---
 
-        Returns:
-            Latest release data or None if no releases
-        """
-        return await self._make_request(f"repos/{owner}/{repo}/releases/latest")
-
-    async def get_repository_tags(
-        self, owner: str, repo: str, page: int = 1, per_page: int = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Get repository tags with pagination.
-
-        Args:
-            owner: Repository owner username
-            repo: Repository name
-            page: Page number (1-based)
-            per_page: Number of items per page
-
-        Returns:
-            List of tag data or None if not found
-        """
+    async def get_repository_tags(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:
         per_page = per_page or config.ITEMS_PER_PAGE
-        return await self._make_request(
-            f"repos/{owner}/{repo}/tags?page={page}&per_page={per_page}"
-        )
+        return await self._make_request(f"repos/{owner}/{repo}/tags?page={page}&per_page={per_page}")
 
-    async def get_repository_releases(
-        self, owner: str, repo: str, page: int = 1, per_page: int = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Get repository releases with pagination.
-
-        Args:
-            owner: Repository owner username
-            repo: Repository name
-            page: Page number (1-based)
-            per_page: Number of items per page
-
-        Returns:
-            List of release data or None if not found
-        """
+    async def get_repository_releases(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:
         per_page = per_page or config.ITEMS_PER_PAGE
-        return await self._make_request(
-            f"repos/{owner}/{repo}/releases?page={page}&per_page={per_page}"
-        )
+        return await self._make_request(f"repos/{owner}/{repo}/releases?page={page}&per_page={per_page}")
 
-    async def get_release_assets(
-        self, owner: str, repo: str, release_id: int
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Get assets for a specific release.
+    async def get_release_assets(self, owner: str, repo: str, release_id: int) -> Optional[List[Dict[str, Any]]]:
+        return await self._make_request(f"repos/{owner}/{repo}/releases/{release_id}/assets")
 
-        Args:
-            owner: Repository owner username
-            repo: Repository name
-            release_id: Release ID
-
-        Returns:
-            List of asset data or None if not found
-        """
-        return await self._make_request(
-            f"repos/{owner}/{repo}/releases/{release_id}/assets"
-        )
-
-    async def get_repository_contributors(
-        self, owner: str, repo: str, page: int = 1, per_page: int = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Get repository contributors with pagination.
-
-        Args:
-            owner: Repository owner username
-            repo: Repository name
-            page: Page number (1-based)
-            per_page: Number of items per page
-
-        Returns:
-            List of contributor data or None if not found
-        """
+    async def get_repository_contributors(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:
         per_page = per_page or config.ITEMS_PER_PAGE
-        return await self._make_request(
-            f"repos/{owner}/{repo}/contributors?page={page}&per_page={per_page}"
-        )
+        return await self._make_request(f"repos/{owner}/{repo}/contributors?page={page}&per_page={per_page}")
+    
+    # ... (rest of the file remains the same) ...
 
     async def download_asset(self, asset_url: str, asset_size: int) -> Optional[bytes]:
-        """
-        Download a release asset if it's within size limits.
-
-        Args:
-            asset_url: Direct download URL for the asset
-            asset_size: Size of the asset in bytes
-
-        Returns:
-            Asset data as bytes or None if download failed or too large
-        """
-        # Check size limit
+        # Download logic remains the same, no caching needed here.
         max_size_bytes = config.MAX_DOWNLOAD_SIZE_MB * 1024 * 1024
         if asset_size > max_size_bytes:
             print(f"Asset too large: {asset_size} bytes > {max_size_bytes} bytes")
             return None
 
-        # Use longer timeout for large files
         timeout = max(
             config.REQUEST_TIMEOUT, asset_size // (1024 * 1024) * 10
-        )  # 10 seconds per MB
+        )
 
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=timeout)
@@ -224,7 +169,6 @@ class GitHubAPI:
             try:
                 async with session.get(asset_url, headers=self.headers) as response:
                     if response.status == 200:
-                        # Read the file in chunks to handle large files better
                         data = bytearray()
                         async for chunk in response.content.iter_chunked(8192):
                             data.extend(chunk)
@@ -239,71 +183,11 @@ class GitHubAPI:
                 print(f"Download error: {e}")
                 return None
 
-    async def get_asset_download_url(self, asset_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get asset download information by ID.
+    async def get_repository_issues( self, owner: str, repo: str, state: str = "open", per_page: int = 1) -> Optional[List[Dict[str, Any]]]:
+        return await self._make_request(f"repos/{owner}/{repo}/issues?state={state}&per_page={per_page}&sort=created&direction=desc")
 
-        Args:
-            asset_id: GitHub asset ID
-
-        Returns:
-            Asset data including download URL or None if not found
-        """
-        return await self._make_request(f"releases/assets/{asset_id}")
-
-    async def get_repository_issues(
-        self, owner: str, repo: str, state: str = "open", per_page: int = 1
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Get repository issues.
-
-        Args:
-            owner: Repository owner username
-            repo: Repository name
-            state: Issue state (open, closed, all)
-            per_page: Number of items per page
-
-        Returns:
-            List of issue data or None if not found
-        """
-        return await self._make_request(
-            f"repos/{owner}/{repo}/issues?state={state}&per_page={per_page}&sort=created&direction=desc"
-        )
-
-    async def get_user(self, username: str) -> Optional[Dict[str, Any]]:
-        """
-        Get user information.
-
-        Args:
-            username: GitHub username
-
-        Returns:
-            User data or None if not found
-        """
-        return await self._make_request(f"users/{username}")
-
-    async def get_authenticated_user_starred_repos(
-        self, page: int = 1, per_page: int = 30
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Get authenticated user's starred repositories.
-
-        Args:
-            page: Page number (1-based)
-            per_page: Number of items per page
-
-        Returns:
-            List of starred repository data or None if not found
-        """
-        return await self._make_request(
-            f"user/starred?page={page}&per_page={per_page}&sort=created&direction=desc"
-        )
+    async def get_authenticated_user_starred_repos(self, page: int = 1, per_page: int = 30) -> Optional[List[Dict[str, Any]]]:
+        return await self._make_request(f"user/starred?page={page}&per_page={per_page}&sort=created&direction=desc")
 
     async def get_authenticated_user(self) -> Optional[Dict[str, Any]]:
-        """
-        Get information about the authenticated user (token owner).
-
-        Returns:
-            User data of the token owner or None if request failed
-        """
         return await self._make_request("user")

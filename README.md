@@ -67,7 +67,6 @@
 
 ```bash
 /settoken    - Connect your GitHub account for higher rate limits  
-/tokeninfo   - Check your token status  
 /removetoken - Remove stored token  
 /trackme     - Track your starred repositories  
 ```
