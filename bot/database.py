@@ -35,7 +35,8 @@ class RepositoryTracker:
                         track_type TEXT, -- 'releases', 'issues', or null for stars
                         last_release_id TEXT,
                         last_issue_id TEXT,
-                        last_starred_repo_ids_json TEXT -- Storing set as JSON
+                        last_starred_repo_ids_json TEXT, -- Storing set as JSON
+                        failure_count INTEGER NOT NULL DEFAULT 0 -- THIS IS THE NEW FIELD
                     )
                 """)
 
@@ -291,3 +292,35 @@ class RepositoryTracker:
         except Exception as e:
             logger.error(f"Error during database cleanup: {e}")
             return 0
+
+    async def increment_failure_count(self, item_key: str) -> int:
+        """Increments the failure count for a tracked item and returns the new count."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute("SELECT failure_count FROM tracked_items WHERE item_key = ?", (item_key,))
+            row = await cursor.fetchone()
+            if not row:
+                return 0
+
+            new_count = row[0] + 1
+            await conn.execute(
+                "UPDATE tracked_items SET failure_count = ? WHERE item_key = ?",
+                (new_count, item_key)
+            )
+            await conn.commit()
+            return new_count
+
+    async def reset_failure_count(self, item_key: str) -> None:
+        """Resets the failure count for a tracked item to 0."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(
+                "UPDATE tracked_items SET failure_count = 0 WHERE item_key = ?", (item_key,)
+            )
+            await conn.commit()
+            
+    async def remove_item_by_key(self, item_key: str) -> None:
+        """Removes a tracked item and its subscriptions by its key."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            # The ON DELETE CASCADE foreign key will handle deleting subscriptions
+            await conn.execute("DELETE FROM tracked_items WHERE item_key = ?", (item_key,))
+            await conn.commit()
+            logger.info(f"Removed tracked item {item_key} from database.")

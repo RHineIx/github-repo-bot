@@ -9,6 +9,8 @@ from typing import Optional, Callable, Any, Dict
 from telebot.async_telebot import AsyncTeleBot
 import logging
 import re
+import time # Add this import at the top of the file
+from collections import OrderedDict # Add this import as well
 
 logger = logging.getLogger(__name__)
 
@@ -205,27 +207,50 @@ class LoadingMessages:
 
 
 class CallbackDataManager:
-    """Manages callback data with hash compression for Telegram's 64-byte limit."""
+    """Manages callback data with hash compression and automatic cleanup."""
 
-    _data_store: Dict[str, Dict[str, Any]] = {}
+    _data_store: Dict[str, tuple] = OrderedDict() # Use OrderedDict to easily remove old items
+    _MAX_ITEMS = 1000  # Max items before forcing cleanup
+    _TTL_SECONDS = 24 * 60 * 60  # Keep data for 24 hours
+
+    @classmethod
+    def _cleanup(cls):
+        """Remove expired and excess items from the data store."""
+        # Remove expired items
+        now = time.time()
+        expired_keys = [
+            key for key, (timestamp, _) in cls._data_store.items()
+            if now - timestamp > cls._TTL_SECONDS
+        ]
+        for key in expired_keys:
+            del cls._data_store[key]
+
+        # If store is still too large, remove the oldest items
+        while len(cls._data_store) > cls._MAX_ITEMS:
+            cls._data_store.popitem(last=False) # Removes the first (oldest) item
 
     @classmethod
     def create_short_callback(cls, action: str, data: Dict[str, Any]) -> str:
         """Create a short callback data string using hash."""
-        # Create a unique hash for the data
+        # Perform cleanup periodically
+        if len(cls._data_store) % 100 == 0:
+            cls._cleanup()
+
         data_str = json.dumps(data, sort_keys=True)
         data_hash = hashlib.md5(data_str.encode()).hexdigest()[:8]
 
-        # Store the full data
-        cls._data_store[data_hash] = data
+        # Store the full data with a timestamp
+        cls._data_store[data_hash] = (time.time(), data)
 
-        # Return short callback format
         return f"{action}:{data_hash}"
 
     @classmethod
-    def get_callback_data(cls, data_hash: str) -> Dict[str, Any]:
+    def get_callback_data(cls, data_hash: str) -> Optional[Dict[str, Any]]:
         """Retrieve full data from hash."""
-        return cls._data_store.get(data_hash, {})
+        stored = cls._data_store.get(data_hash)
+        if stored:
+            return stored[1] # Return the actual data dictionary
+        return None
 class TrackCommandParser:  
     """Parser for the enhanced /track command syntax."""  
       

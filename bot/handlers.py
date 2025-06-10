@@ -240,33 +240,55 @@ In any chat, type:
 
     async def handle_status(self, message: Message) -> None:
         """Handle /status command to show bot and user status."""
+        user_id = message.from_user.id
         wait_msg = await MessageUtils.safe_reply(self.bot, message, "🔍 Fetching status...")
         if not wait_msg:
             return
 
-        user_id = message.from_user.id
-        user_api = GitHubAPI(user_id=user_id, token_manager=self.token_manager)
-
         try:
-            # Fetch data concurrently
-            rate_limit_task = user_api.get_rate_limit()
-            user_data_task = user_api.get_authenticated_user()
-            tracked_count_task = self.tracker.count_user_subscriptions(user_id)
-
-            results = await asyncio.gather(rate_limit_task, user_data_task, tracked_count_task, return_exceptions=True)
+            # Attempt to get the user's personal token
+            user_token = await self.token_manager.get_token(user_id)
+            tracked_count = await self.tracker.count_user_subscriptions(user_id)
             
-            rate_limit_data, user_data, tracked_count = results
+            status_text = ""
+            rate_limit_data = None
 
-            # --- Formatting the message ---
-            status_text = "📊 <b>Bot Status</b>\n\n✅ Operational\n\n"
+            if user_token:
+                # Case 1: User has a personal token. Use it exclusively.
+                api_client = GitHubAPI(token=user_token)
+                
+                # Fetch user data and rate limit concurrently
+                user_data_task = api_client.get_authenticated_user()
+                rate_limit_task = api_client.get_rate_limit()
+                user_data, rate_limit_data = await asyncio.gather(user_data_task, rate_limit_task)
 
-            if isinstance(user_data, dict): # Check if token is valid and user data was fetched
-                status_text += f"👤 <b>GitHub Account:</b> @{user_data.get('login', 'N/A')}\n"
-                status_text += "🔑 <b>Token Status:</b> Valid\n\n"
+                if isinstance(user_data, dict):
+                    # Personal token is valid
+                    status_text = "📊 <b>Your Personal Status</b>\n\n"
+                    status_text += f"👤 <b>GitHub Account:</b> @{user_data.get('login', 'N/A')}\n"
+                    status_text += "🔑 <b>Token Status:</b> Valid\n\n"
+                else:
+                    # Personal token is invalid/revoked. Show public status as a fallback.
+                    status_text = (
+                        "⚠️ <b>Your GitHub token is invalid or has been revoked.</b>\n"
+                        "Please set a new one using <code>/settoken</code>.\n\n"
+                        "Showing public rate limit status instead:\n"
+                    )
+                    public_api = GitHubAPI(token=None) # Unauthenticated client
+                    rate_limit_data = await public_api.get_rate_limit()
+
             else:
-                status_text += "⚠️ <b>No valid GitHub Token found.</b>\n"
-                status_text += "You are using the public rate limit. For a higher limit (5000 requests/hour), please set your personal token with <code>/settoken</code>.\n\n"
-
+                # Case 2: User has no personal token. Show public status.
+                status_text = "📊 <b>Public API Status</b>\n\n"
+                status_text += "⚠️ <b>No personal GitHub Token set.</b>\n"
+                status_text += "You are using the public rate limit (max 60 requests/hour).\n"
+                status_text += "For a higher limit and more features, use <code>/settoken</code>.\n\n"
+                
+                # Create an unauthenticated client to get the public rate limit
+                public_api = GitHubAPI(token=None)
+                rate_limit_data = await public_api.get_rate_limit()
+                
+            # --- Append rate limit and subscription info to the message ---
             if isinstance(rate_limit_data, dict):
                 core_limit = rate_limit_data.get('resources', {}).get('core', {})
                 remaining = core_limit.get('remaining', 'N/A')
@@ -285,13 +307,12 @@ In any chat, type:
             if isinstance(tracked_count, int):
                 status_text += "📋 <b>Your Subscriptions:</b>\n"
                 status_text += f" - Tracking: {tracked_count} items (repositories and stars)"
-
+            
             await MessageUtils.safe_edit_message(self.bot, wait_msg.chat.id, wait_msg.message_id, status_text)
 
         except Exception as e:
             logger.error(f"Error in handle_status: {e}")
             await MessageUtils.safe_edit_message(self.bot, wait_msg.chat.id, wait_msg.message_id, ErrorMessages.API_ERROR)
-
 
     async def handle_repo(self, message: Message) -> None:
         """
@@ -868,6 +889,40 @@ In any chat, type:
         except Exception as e:  
             logger.error(f"Error in track command: {e}")  
             await self.bot.reply_to(message, "❌ An error occurred while processing your request.")
+
+    async def handle_untrack(self, message: Message) -> None:
+        """Handle /untrack command to stop tracking a repository."""
+        try:
+            repo_input = MessageUtils.validate_command_args(message.text)
+            if not repo_input:
+                await MessageUtils.safe_reply(
+                    self.bot,
+                    message,
+                    "❌ Please specify a repository.\n\n💡 Example: <code>/untrack microsoft/vscode</code>",
+                )
+                return
+
+            parsed = URLParser.parse_repo_input(repo_input)
+            if not parsed:
+                await MessageUtils.safe_reply(
+                    self.bot, message, ErrorMessages.INVALID_REPO_FORMAT
+                )
+                return
+
+            owner, repo = parsed
+
+            # Remove from tracking
+            await self.tracker.remove_tracked_repo(message.from_user.id, owner, repo)
+
+            await MessageUtils.safe_reply(
+                self.bot,
+                message,
+                f"✅ <b>Repository Untracked!</b>\n\n📦 <b>{owner}/{repo}</b> has been removed from your tracking list.",
+            )
+
+        except Exception as e:
+            print(f"Error in handle_untrack: {e}")
+            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
 
     async def handle_tracked(self, message: Message) -> None:
         """Handle /tracked command to show user's tracked repositories."""

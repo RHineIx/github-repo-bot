@@ -7,6 +7,13 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
+class GitHubAPIError(Exception):
+    """Custom exception for GitHub API errors."""
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"GitHub API Error {status_code}: {message}")
+
 class GitHubAPI:
     """Asynchronous GitHub API client with a shared cache and per-user token support."""
 
@@ -15,18 +22,23 @@ class GitHubAPI:
 
     def __init__(
         self,
-        token: Optional[str] = None,
+        token: Optional[str] = "USE_FALLBACK",  # Use a sentinel value
         user_id: Optional[int] = None,
         token_manager=None,
     ):
         self.token_manager = token_manager
         self.user_id = user_id
-        self.token = token or config.GITHUB_TOKEN
+
+        # New logic: Only fall back to the global token if no token is explicitly passed.
+        if token == "USE_FALLBACK":
+            self.token = config.GITHUB_TOKEN
+        else:
+            self.token = token # Respect the passed value, even if it's None
+
+        # --- The missing lines that caused the error ---
         self.base_url = config.GITHUB_API_BASE
-
-        # 2. The instance-specific cache definition has been removed from here.
-
         self.cache_ttl = config.CACHE_TTL_SECONDS
+        # --- End of missing lines ---
 
         # Set up basic headers synchronously
         self.headers = {
@@ -89,16 +101,23 @@ class GitHubAPI:
                             await asyncio.sleep(wait_duration)
                             continue # Retry the request by restarting the loop
 
-                        # Other error cases
+                        # Other error cases - THIS IS THE MODIFIED PART
                         else:
-                            logger.error(f"GitHub API error: {response.status} - {await response.text()} for URL {url}")
-                            return None # Exit loop on other errors
-                except asyncio.TimeoutError:
+                            error_text = await response.text()
+                            logger.error(f"GitHub API error: {response.status} - {error_text} for URL {url}")
+                            # Raise our custom exception instead of returning None
+                            raise GitHubAPIError(response.status, error_text)
+                            
+                except asyncio.TimeoutError as e:
                     logger.error(f"Request timeout for: {url}")
-                    return None # Exit loop on timeout
+                    raise GitHubAPIError(408, str(e)) # Raise custom exception for timeout
                 except Exception as e:
-                    logger.error(f"Request error for {url}: {e}")
-                    return None # Exit loop on other exceptions
+                    # Re-raise other exceptions as our custom type for consistent handling
+                    if not isinstance(e, GitHubAPIError):
+                         logger.error(f"Request error for {url}: {e}")
+                         raise GitHubAPIError(500, str(e))
+                    else:
+                        raise e
 
     async def get_repository(self, owner: str, repo: str) -> Optional[Dict[str, Any]]:
         """Get repository information, with caching."""

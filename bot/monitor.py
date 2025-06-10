@@ -1,13 +1,15 @@
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-from github import GitHubAPI
 from .database import RepositoryTracker
 from .token_manager import TokenManager
+from github.api import GitHubAPI, GitHubAPIError 
 from github.formatter import RepoFormatter
 
 logger = logging.getLogger(__name__)
 
+#constant for the failure threshold
+FAILURE_THRESHOLD = 5
 
 class RepositoryMonitor:
     """Monitors tracked repositories for changes."""
@@ -42,11 +44,26 @@ class RepositoryMonitor:
         tracked_items = await self.tracker.get_all_tracked_repos()
 
         for item_data in tracked_items:
+            item_key = item_data.get('item_key')
             try:
                 await self._check_repository_updates(item_data)
+                # If the check was successful, reset the failure count
+                if item_key:
+                    await self.tracker.reset_failure_count(item_key)
+            except GitHubAPIError as e:
+                # Handle API errors, specifically 404
+                if e.status_code == 404:
+                    logger.warning(f"Repo check failed for {item_key} with 404 Not Found.")
+                    new_failure_count = await self.tracker.increment_failure_count(item_key)
+                    
+                    if new_failure_count >= FAILURE_THRESHOLD:
+                        logger.error(f"Item {item_key} reached failure threshold. Removing and notifying users.")
+                        await self._send_untrack_notification(item_data)
+                        await self.tracker.remove_item_by_key(item_key)
+                else:
+                    logger.error(f"Error checking {item_key}: {e}")
             except Exception as e:
-                identifier = item_data.get('item_key', 'unknown item')
-                logger.error(f"Error checking {identifier}: {e}")
+                logger.error(f"A non-API error occurred while checking {item_key}: {e}")
 
     async def _check_repository_updates(self, repo_data: Dict):
         """Check a single repository for updates based on tracking type."""
@@ -286,3 +303,18 @@ in 📦 <a href="https://github.com/{owner}/{repo}">{owner}/{repo}</a>
 🔗 <a href="{html_url}">View Issue</a>  
 #openedissue"""  
         return message.strip()
+    
+    async def _send_untrack_notification(self, repo_data: Dict):
+        """Sends a notification that a repository is no longer being tracked due to errors."""
+        owner = repo_data.get("owner", "N/A")
+        repo = repo_data.get("repo", "N/A")
+        item_key = repo_data.get("item_key", "N/A")
+        
+        message_text = (
+            f"🔔 **Tracking Stopped**\n\n"
+            f"Tracking for <code>{owner}/{repo}</code> has been automatically stopped "
+            f"because the repository could not be found after multiple attempts.\n\n"
+            f"It may have been deleted, made private, or renamed."
+        )
+        
+        await self._send_notifications_to_all_subscribers(repo_data, message_text)
