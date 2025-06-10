@@ -1,4 +1,3 @@
-# rhineix/github-repo-bot/github-repo-bot-353a356069cb9a7c65f342d5b42fee8862333925/github/api.py
 import aiohttp
 import asyncio
 import time
@@ -9,7 +8,10 @@ from config import config
 logger = logging.getLogger(__name__)
 
 class GitHubAPI:
-    """Asynchronous GitHub API client with per-user token support and caching."""
+    """Asynchronous GitHub API client with a shared cache and per-user token support."""
+
+    # 1. The cache is now a class variable, shared across all instances.
+    _cache: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -22,8 +24,8 @@ class GitHubAPI:
         self.token = token or config.GITHUB_TOKEN
         self.base_url = config.GITHUB_API_BASE
 
-        # Caching mechanism
-        self._cache = {}
+        # 2. The instance-specific cache definition has been removed from here.
+
         self.cache_ttl = config.CACHE_TTL_SECONDS
 
         # Set up basic headers synchronously
@@ -45,40 +47,58 @@ class GitHubAPI:
             self.headers["Authorization"] = f"token {self.token}"
 
     def _check_cache(self, key: str) -> Optional[Any]:
-        """Checks if a valid (non-expired) entry exists in the cache."""
-        if key in self._cache:
-            cached_time, cached_data = self._cache[key]
+        """Checks if a valid (non-expired) entry exists in the shared cache."""
+        # 3. Accessing the cache via the class name GitHubAPI._cache
+        if key in GitHubAPI._cache:
+            cached_time, cached_data = GitHubAPI._cache[key]
             if time.time() - cached_time < self.cache_ttl:
-                logger.info(f"Cache hit for key: {key}")
+                logger.info(f"Shared cache hit for key: {key}")
                 return cached_data
-        logger.info(f"Cache miss for key: {key}")
+        logger.info(f"Shared cache miss for key: {key}")
         return None
 
     def _update_cache(self, key: str, data: Any):
-        """Updates the cache with new data."""
-        self._cache[key] = (time.time(), data)
+        """Updates the shared cache with new data."""
+        # 3. Accessing the cache via the class name GitHubAPI._cache
+        GitHubAPI._cache[key] = (time.time(), data)
 
     async def _make_request(self, endpoint: str) -> Optional[Dict[str, Any]]:
-        """Make an HTTP request to GitHub API."""
+        """Make an HTTP request to GitHub API with smart rate limit handling."""
         await self._setup_headers()
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=config.REQUEST_TIMEOUT)
-        ) as session:
-            try:
-                async with session.get(url, headers=self.headers) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"GitHub API error: {response.status} - {await response.text()} for URL {url}")
-                        return None
-            except asyncio.TimeoutError:
-                logger.error(f"Request timeout for: {url}")
-                return None
-            except Exception as e:
-                logger.error(f"Request error for {url}: {e}")
-                return None
+        while True: # Loop to allow for retries
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=config.REQUEST_TIMEOUT)
+            ) as session:
+                try:
+                    async with session.get(url, headers=self.headers) as response:
+                        # Success case
+                        if response.status == 200:
+                            return await response.json()
+                        
+                        # Rate limit handling case
+                        elif response.status == 403 and 'X-RateLimit-Reset' in response.headers:
+                            reset_timestamp = int(response.headers['X-RateLimit-Reset'])
+                            current_time = int(time.time())
+                            wait_duration = max(reset_timestamp - current_time, 0) + 2 # Add 2s buffer
+                            
+                            logger.warning(
+                                f"Rate limit exceeded. Waiting for {wait_duration} seconds before retrying."
+                            )
+                            await asyncio.sleep(wait_duration)
+                            continue # Retry the request by restarting the loop
+
+                        # Other error cases
+                        else:
+                            logger.error(f"GitHub API error: {response.status} - {await response.text()} for URL {url}")
+                            return None # Exit loop on other errors
+                except asyncio.TimeoutError:
+                    logger.error(f"Request timeout for: {url}")
+                    return None # Exit loop on timeout
+                except Exception as e:
+                    logger.error(f"Request error for {url}: {e}")
+                    return None # Exit loop on other exceptions
 
     async def get_repository(self, owner: str, repo: str) -> Optional[Dict[str, Any]]:
         """Get repository information, with caching."""
@@ -106,7 +126,6 @@ class GitHubAPI:
 
     async def get_latest_release(self, owner: str, repo: str) -> Optional[Dict[str, Any]]:
         """Get latest release information. We don't cache this heavily to keep it fresh."""
-        # A shorter TTL can be used here if needed, but for simplicity we use the global TTL.
         cache_key = f"latest_release:{owner}/{repo}"
         cached_data = self._check_cache(cache_key)
         if cached_data:
@@ -133,8 +152,6 @@ class GitHubAPI:
         """Gets the current rate limit status. This is NOT cached."""
         return await self._make_request("rate_limit")
 
-    # --- Methods below are generally not cached as they are user-specific or paginated ---
-
     async def get_repository_tags(self, owner: str, repo: str, page: int = 1, per_page: int = None) -> Optional[List[Dict[str, Any]]]:
         per_page = per_page or config.ITEMS_PER_PAGE
         return await self._make_request(f"repos/{owner}/{repo}/tags?page={page}&per_page={per_page}")
@@ -150,10 +167,7 @@ class GitHubAPI:
         per_page = per_page or config.ITEMS_PER_PAGE
         return await self._make_request(f"repos/{owner}/{repo}/contributors?page={page}&per_page={per_page}")
     
-    # ... (rest of the file remains the same) ...
-
     async def download_asset(self, asset_url: str, asset_size: int) -> Optional[bytes]:
-        # Download logic remains the same, no caching needed here.
         max_size_bytes = config.MAX_DOWNLOAD_SIZE_MB * 1024 * 1024
         if asset_size > max_size_bytes:
             print(f"Asset too large: {asset_size} bytes > {max_size_bytes} bytes")

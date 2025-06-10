@@ -11,7 +11,7 @@ from telebot import types
 
 from github import GitHubAPI, RepoFormatter, UserFormatter
 from github.formatter import URLParser
-from bot.utils import MessageUtils, ErrorMessages, LoadingMessages, CallbackDataManager
+from bot.utils import MessageUtils, ErrorMessages, LoadingMessages, CallbackDataManager, TrackCommandParser
 from config import config
 
 from bot.database import RepositoryTracker
@@ -47,7 +47,6 @@ class BotHandlers:
         self.bot.message_handler(commands=['track'])(self.handle_track_command)  
         self.bot.message_handler(commands=["untrack"])(self.handle_untrack)
         self.bot.message_handler(commands=["tracked"])(self.handle_tracked)
-        self.bot.message_handler(commands=["notifications"])(self.handle_notifications)
         self.bot.message_handler(commands=["trackme"])(self.handle_trackme)
         # Token manager handlers
         self.bot.message_handler(commands=["settoken"])(self.handle_set_token)
@@ -773,187 +772,102 @@ In any chat, type:
             reply_markup=keyboard,
         )
 
-    async def handle_track_command(self, message):
-        """Handle the enhanced /track command with channel and topic support."""  
-        try:  
-            command_text = message.text.strip()  
-              
-            # Remove /track from the text  
-            args = command_text.replace('/track', '').strip()  
-              
-            # Parse the new syntax using regex  
-            import re  
-            pattern = r'^([^/\s]+/[^/\s\[]+)\s*\[([^\]]+)\](?:\s*>\s*(.+))?$'  
-            match = re.match(pattern, args)  
-              
-            if not match:  
+    async def handle_track_command(self, message: Message):
+        """
+        Handle the enhanced /track command.
+        This version uses a dedicated parser and requires the user to have a token.
+        """
+        try:
+            # 1. Use the dedicated parser from utils.py to parse the command.
+            parsed_args = TrackCommandParser.parse_track_command(message.text)
+            
+            # Handle invalid command format
+            if not parsed_args:
                 await self.bot.reply_to(message,   
                     "❌ Invalid format. Use:\n"  
-                    "• <code>/track owner/repo [releases,issues]</code> - to your DM\n"  
-                    "• <code>/track owner/repo [releases] > chat_id</code> - to channel\n"  
-                    "• <code>/track owner/repo [issues] > chat_id/thread_id</code> - to topic",  
-                    parse_mode='HTML'  
+                    "• <code>/track owner/repo [releases,issues]</code>\n"
+                    "• <code>/track owner/repo [releases] > chat_id</code>\n"
+                    "• <code>/track owner/repo [issues] > chat_id/thread_id</code>",
+                    parse_mode='HTML'
                 )  
-                return  
-              
-            repo_path, preferences_str, destination = match.groups()  
-              
-            # Parse repository  
-            try:  
-                owner, repo = repo_path.split('/')  
-            except ValueError:  
-                await self.bot.reply_to(message, "❌ Invalid repository format. Use: owner/repo")  
-                return  
-              
-            # Parse preferences  
-            preferences = [p.strip() for p in preferences_str.split(',')]  
-            valid_preferences = ['releases', 'issues']  
-            preferences = [p for p in preferences if p in valid_preferences]  
-              
-            if not preferences:  
-                await self.bot.reply_to(message, "❌ Invalid preferences. Use: [releases], [issues], or [releases,issues]")  
-                return  
-              
-            # Parse destination  
-            chat_id = None  
-            thread_id = None  
-              
-            if destination:  
-                try:  
-                    if '/' in destination:  
-                        # Format: chat_id/thread_id  
-                        dest_parts = destination.split('/')  
-                        if len(dest_parts) == 2:  
-                            chat_id = int(dest_parts[0])  
-                            thread_id = int(dest_parts[1])  
-                        else:  
-                            await self.bot.reply_to(message, "❌ Invalid destination format. Use: chat_id or chat_id/thread_id")  
-                            return  
-                    else:  
-                        # Format: chat_id only  
-                        chat_id = int(destination)  
-                except ValueError:  
-                    await self.bot.reply_to(message, "❌ Invalid destination. Chat ID and thread ID must be numbers.")  
-                    return  
-              
-            # Show typing action  
+                return
+
+            # Extract arguments cleanly from the parsed dictionary
+            owner = parsed_args['owner']
+            repo = parsed_args['repo']
+            preferences = parsed_args['preferences']
+            chat_id = parsed_args['chat_id']
+            thread_id = parsed_args['thread_id']
+
+            # 2. Mandatory token check before any other action.
+            user_has_token = await self.token_manager.token_exists(message.from_user.id)
+            if not user_has_token:
+                error_message = (
+                    "❌ **This feature requires a personal GitHub token.**\n\n"
+                    "To track repositories, you must first link your account.\n\n"
+                    "Please use the command:\n"
+                    "<code>/settoken YOUR_GITHUB_TOKEN</code>\n\n"
+                    "After setting the token, you can use the /track command again."
+                )
+                await self.bot.reply_to(message, error_message, parse_mode='HTML')
+                return
+
+            # If we reach here, the user has a token. Proceed with logic.
             await MessageUtils.send_typing_action(self.bot, message.chat.id)  
-              
-            # Validate repository exists using your GitHub API  
-            github_api = GitHubAPI()  
-            repo_data = await github_api.get_repository(owner, repo)  
-              
+            
+            # Use a user-specific API client to validate the repository
+            user_api = GitHubAPI(user_id=message.from_user.id, token_manager=self.token_manager)
+            repo_data = await user_api.get_repository(owner, repo)
+            
             if not repo_data:  
                 await self.bot.reply_to(message, f"❌ Repository {owner}/{repo} not found.")  
                 return  
-              
-            # Validate permissions for channel/topic destinations  
+                
+            # Validate permissions for channel/topic destinations
             if chat_id:  
                 try:  
-                    # Check if bot can send messages to the destination  
+                    test_msg_text = "🔧 Testing bot permissions..."
                     if thread_id:  
-                        # Test topic access  
-                        test_msg = await self.bot.send_message(  
-                            chat_id,   
-                            "🔧 Testing permissions...",   
-                            message_thread_id=thread_id  
-                        )  
-                        await self.bot.delete_message(chat_id, test_msg.message_id)  
+                        test_msg = await self.bot.send_message(chat_id, test_msg_text, message_thread_id=thread_id)  
                     else:  
-                        # Test channel access  
-                        test_msg = await self.bot.send_message(chat_id, "🔧 Testing permissions...")  
-                        await self.bot.delete_message(chat_id, test_msg.message_id)  
-                except Exception as e:  
+                        test_msg = await self.bot.send_message(chat_id, test_msg_text)
+                    await self.bot.delete_message(chat_id, test_msg.message_id)
+                except Exception as e:
                     logger.error(f"Permission test failed for destination {chat_id}/{thread_id}: {e}")  
-                    await self.bot.reply_to(  
-                        message,   
-                        "❌ Cannot send messages to destination. Please ensure:\n"  
-                        "• Bot is added to the channel/group\n"  
-                        "• Bot has permission to send messages\n"  
-                        "• For topics: Bot can post in the specific topic"  
+                    await self.bot.reply_to(message,   
+                        "❌ Cannot send messages to the destination. Please ensure:\n"  
+                        "• The bot is a member of the channel/group.\n"  
+                        "• The bot has permission to send messages.\n"  
+                        "• For topics: The bot can post in that specific topic."  
                     )  
                     return  
-              
-            # Add tracking using your existing tracker  
-            success = await self.tracker.add_tracked_repo_with_destination(  
-                message.from_user.id,  
-                owner,  
-                repo,  
-                preferences,  
-                chat_id,  
-                thread_id  
-            )
-              
-            if success:  
-                # Format success message  
-                destination_text = "your DM"  
-                if chat_id and thread_id:  
-                    destination_text = f"topic {chat_id}/{thread_id}"  
-                elif chat_id:  
-                    destination_text = f"channel/group {chat_id}"  
-                  
-                preferences_text = ", ".join(preferences)  
-                  
-                success_message = (  
-                    f"✅ Now tracking <b>{owner}/{repo}</b> for <code>{preferences_text}</code>\n"  
-                    f"📍 Notifications will be sent to: {destination_text}\n\n"  
-                    f"🔔 You'll receive notifications when new {preferences_text} are available."  
-                )
                 
-                # --- warning if the user has no token and is tracking to self ---
-                if not chat_id: # Only warn if tracking to their own DM
-                    user_has_token = await self.token_manager.token_exists(message.from_user.id)
-                    if not user_has_token:
-                        success_message += (
-                            '\n\n⚠️ <b>Important Note:</b> You have not set your personal GitHub token. '
-                            'Alerts will only work if another user tracking this repository has set their token. '
-                            'Use <code>/settoken</code> to ensure this feature works.'
-                        )
-                  
+            # Add tracking to the database
+            success = await self.tracker.add_tracked_repo_with_destination(  
+                message.from_user.id, owner, repo, preferences, chat_id, thread_id  
+            )
+                
+            if success:
+                # Format success message (the old warning is removed as it's no longer needed)
+                destination_text = "your DMs"  
+                if chat_id and thread_id:  
+                    destination_text = f"topic <code>{chat_id}/{thread_id}</code>"
+                elif chat_id:  
+                    destination_text = f"channel/group <code>{chat_id}</code>"
+                
+                preferences_text = ", ".join(preferences)  
+                
+                success_message = (  
+                    f"✅ Now tracking <b>{owner}/{repo}</b> for <code>{preferences_text}</code>.\n"  
+                    f"📍 Notifications will be sent to: {destination_text}"  
+                )
                 await self.bot.reply_to(message, success_message, parse_mode='HTML')  
-                  
-                # Log the tracking addition  
-                logger.info(f"User {message.from_user.id} added tracking for {owner}/{repo} "  
-                           f"({preferences_text}) to destination: {destination_text}")  
             else:  
                 await self.bot.reply_to(message, "❌ Failed to add tracking. Please try again.")  
-                  
+                    
         except Exception as e:  
             logger.error(f"Error in track command: {e}")  
-            await self.bot.reply_to(message, "❌ An error occurred while processing your request. Please try again.")
-    async def handle_untrack(self, message: Message) -> None:
-        """Handle /untrack command to stop tracking a repository."""
-        try:
-            repo_input = MessageUtils.validate_command_args(message.text)
-            if not repo_input:
-                await MessageUtils.safe_reply(
-                    self.bot,
-                    message,
-                    "❌ Please specify a repository.\n\n💡 Example: <code>/untrack microsoft/vscode</code>",
-                )
-                return
-
-            parsed = URLParser.parse_repo_input(repo_input)
-            if not parsed:
-                await MessageUtils.safe_reply(
-                    self.bot, message, ErrorMessages.INVALID_REPO_FORMAT
-                )
-                return
-
-            owner, repo = parsed
-
-            # Remove from tracking
-            await self.tracker.remove_tracked_repo(message.from_user.id, owner, repo)
-
-            await MessageUtils.safe_reply(
-                self.bot,
-                message,
-                f"✅ <b>Repository Untracked!</b>\n\n📦 <b>{owner}/{repo}</b> has been removed from your tracking list.",
-            )
-
-        except Exception as e:
-            print(f"Error in handle_untrack: {e}")
-            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
+            await self.bot.reply_to(message, "❌ An error occurred while processing your request.")
 
     async def handle_tracked(self, message: Message) -> None:
         """Handle /tracked command to show user's tracked repositories."""
@@ -980,33 +894,6 @@ In any chat, type:
 
         except Exception as e:
             print(f"Error in handle_tracked: {e}")
-            await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
-
-    async def handle_notifications(self, message: Message) -> None:
-        """Handle /notifications command to toggle notification settings."""
-        try:
-            # Extract argument (on/off)
-            arg = MessageUtils.validate_command_args(message.text)
-            if not arg or arg.lower() not in ["on", "off"]:
-                await MessageUtils.safe_reply(
-                    self.bot,
-                    message,
-                    "❌ Please specify 'on' or 'off'.\n\n💡 Example: <code>/notifications on</code>",
-                )
-                return
-
-            # For now, just acknowledge the command
-            # You can implement actual notification toggle logic later
-            status = "enabled" if arg.lower() == "on" else "disabled"
-
-            await MessageUtils.safe_reply(
-                self.bot,
-                message,
-                f"🔔 <b>Notifications {status.title()}</b>\n\nNotifications have been {status} for your account.",
-            )
-
-        except Exception as e:
-            print(f"Error in handle_notifications: {e}")
             await MessageUtils.safe_reply(self.bot, message, ErrorMessages.API_ERROR)
 
     async def handle_inline_query(self, inline_query) -> None:

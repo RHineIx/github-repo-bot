@@ -259,3 +259,35 @@ class RepositoryTracker:
             """, (str(user_id),))
             result = await cursor.fetchone()
             return result[0] if result else 0
+        
+    async def cleanup_orphaned_items(self) -> int:
+        """
+        Removes items from tracked_items that have no subscribers.
+        This prevents the monitor from checking unused repositories.
+        Returns the number of cleaned items.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                # This query selects the IDs of all tracked_items that do not
+                # have a corresponding entry in the subscriptions table.
+                cursor = await conn.execute("""
+                    DELETE FROM tracked_items
+                    WHERE id IN (
+                        SELECT ti.id
+                        FROM tracked_items ti
+                        LEFT JOIN subscriptions s ON ti.id = s.item_id
+                        WHERE s.id IS NULL
+                    )
+                """)
+                await conn.commit()
+                
+                cleaned_count = cursor.rowcount
+                if cleaned_count > 0:
+                    logger.info(f"Database cleanup: Removed {cleaned_count} orphaned tracked items.")
+                else:
+                    logger.info("Database cleanup: No orphaned items to remove.")
+                
+                return cleaned_count
+        except Exception as e:
+            logger.error(f"Error during database cleanup: {e}")
+            return 0
